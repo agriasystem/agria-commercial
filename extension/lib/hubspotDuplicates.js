@@ -5,7 +5,8 @@
 //   - CERTO, blocco assoluto, nessuna conferma possibile:
 //       stesso dominio normalizzato (minuscolo, senza protocollo, "www." e barre finali; sottodomini
 //       diversi restano diversi); oppure almeno DUE identificatori forti tra email aziendale,
-//       telefono normalizzato e sito web coerente col dominio; oppure email o telefono + stesso nome.
+//       telefono normalizzato e sito web coerente col dominio; oppure email, telefono o sito web
+//       + stesso nome.
 //   - FORTE:    un solo identificatore forte (email, telefono o sito), senza altri segnali.
 //   - POSSIBILE: solo il nome: stesso nome nella stessa città, o nome simile nella stessa città.
 //   Forte e possibile si mostrano come «possibile duplicato»: il commerciale controlla e conferma.
@@ -69,6 +70,18 @@ export function phoneVariants(raw) {
   return [...out];
 }
 
+/** Il sito nelle forme più comuni (con e senza protocollo, "www." e barra finale), in minuscolo per l'operatore IN. */
+export function websiteVariants(domain) {
+  const d = normalizeDomain(domain || '');
+  if (!d) return [];
+  const out = [];
+  for (const host of [d, `www.${d}`]) {
+    out.push(host, `${host}/`);
+    for (const scheme of ['https://', 'http://']) out.push(`${scheme}${host}`, `${scheme}${host}/`);
+  }
+  return out;
+}
+
 /** Il profilo LinkedIn nelle forme più comuni, in minuscolo come chiede HubSpot per l'operatore IN. */
 export function linkedinVariants(raw) {
   const li = normalizeLinkedin(raw);
@@ -97,11 +110,11 @@ export function companyKeys(company = {}) {
   };
 }
 
-/** Prima ricerca: dominio, email aziendali, telefono (gruppi in OR). null se non c'è niente da cercare. */
+/** Prima ricerca: dominio, sito web, email aziendali, telefono (gruppi in OR, al massimo 5). null se non c'è niente da cercare. */
 export function strongCompanySearch(company) {
   const k = companyKeys(company);
   const groups = [];
-  if (k.domain) groups.push(inFilter('domain', [k.domain, `www.${k.domain}`]));
+  if (k.domain) groups.push(inFilter('domain', [k.domain, `www.${k.domain}`]), inFilter('website', websiteVariants(k.domain)));
   if (k.emails.length) groups.push(inFilter('email_aziendale_principale', k.emails), inFilter('email_aziendale_secondaria', k.emails));
   if (k.phone) groups.push(inFilter('phone', phoneVariants(k.phone)));
   return groups.length ? searchBody(groups, { limit: STRONG_LIMIT, properties: COMPANY_FIELDS }) : null;
@@ -171,8 +184,8 @@ function similarName(a, b) {
 
 /**
  * Gravità di un record trovato, dai motivi della corrispondenza → 'certain' | 'strong' | 'possible' | ''.
- *   certain: dominio; oppure due identificatori forti (email, telefono, sito web); oppure email o
- *            telefono + nome fortemente coerente (stessa parte distintiva, anche in un'altra città)
+ *   certain: dominio; oppure due identificatori forti (email, telefono, sito web); oppure email,
+ *            telefono o sito web + nome fortemente coerente (stessa parte distintiva, anche in un'altra città)
  *   strong:  un solo identificatore forte
  *   possible: solo il nome (stesso nome e città, o nome simile nella stessa città)
  */
@@ -180,7 +193,7 @@ export function companyLevel(reasons) {
   const has = (r) => reasons.includes(r);
   const identifiers = ['email', 'phone', 'website'].filter(has).length;
   const sameName = has('name') || has('name_city');
-  if (has('domain') || identifiers >= 2 || ((has('email') || has('phone')) && sameName)) return LEVEL.certain;
+  if (has('domain') || identifiers >= 2 || (identifiers >= 1 && sameName)) return LEVEL.certain;
   if (identifiers === 1) return LEVEL.strong;
   if (has('name_city') || has('name_similar')) return LEVEL.possible;
   return '';

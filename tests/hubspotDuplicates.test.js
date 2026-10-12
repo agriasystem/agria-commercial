@@ -129,3 +129,15 @@ test('Lead Status: etichette del portale solo in interfaccia', () => {
   assert.equal(leadStatusLabel('IN_PROGRESS'), 'IN_PROGRESS', 'un valore sconosciuto resta com\'è');
   assert.equal(leadStatusLabel(''), '');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Patch 2.0.2: sito web + nome
+
+test('stesso sito + stesso nome => duplicato certo', () => {
+  assert.deepEqual(levelOf({ name: 'Il Poggio del Sole', domain: 'vecchio-dominio.it', website: 'https://www.test-fallback-scout.invalid/' }), ['certain', 'certain', ['website', 'name_city']]);
+  assert.deepEqual(levelOf({ name: 'POGGIO DEL SOLE S.r.l.', website: 'http://test-fallback-scout.invalid', city: 'Firenze' }), ['certain', 'certain', ['website', 'name']]);
+});
+
+test('stesso sito + nome diverso => possibile duplicato', () => {
+  assert.deepEqual(levelOf({ name: 'Osteria del Ponte', domain: 'vecchio-dominio.it', website: 'www.test-fallback-scout.invalid' }), ['possible', 'strong', ['website']]);
+});

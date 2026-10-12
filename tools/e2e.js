@@ -666,6 +666,21 @@ async function run(context, site, fake) {
   check('possibile duplicato: «Crea» bloccato finché non si conferma', await panel.isDisabled('#create-company'));
   await panel.check('#ack-duplicate');
   check('possibile duplicato: dopo la conferma si può creare', await panel.isEnabled('#create-company'));
+  // stesso sito web, nome diverso: ancora possibile duplicato
+  fake.addCompany({ name: 'Osteria del Ponte', domain: 'osteriadelponte.test', website: 'https://www.lamora-caso.test/' });
+  v = await verify();
+  equal('stesso sito + nome diverso: possibile duplicato', v.kind, 'warn');
+  includes('stesso sito + nome diverso: motivo', v.text, 'stesso sito web');
+  check('stesso sito + nome diverso: conferma presente', await panel.isVisible('#ack-duplicate'));
+  // stesso sito web + stesso nome: duplicato certo, nessuna conferma e nessuna creazione
+  const sameSite = fake.addCompany({ name: 'Agriturismo La Mora', domain: 'vecchia-lamora.test', website: 'http://lamora-caso.test' });
+  const writesBeforeSite = writes().length;
+  v = await verify();
+  equal('stesso sito + stesso nome: duplicato certo', v.kind, 'found');
+  for (const part of ['⛔ Azienda già presente in HubSpot', `Record ID ${sameSite}`, 'stesso sito web', 'stesso nome']) includes(`stesso sito + stesso nome: ${part}`, v.text, part);
+  check('stesso sito + stesso nome: nessuna casella di conferma', !(await panel.$('#ack-duplicate')));
+  check('stesso sito + stesso nome: nessun pulsante «Crea Azienda»', !(await panel.$('#create-company')) && await panel.isHidden('#company-step'));
+  equal('stesso sito + stesso nome: nessuna scrittura', writes().length, writesBeforeSite);
   // due identificatori forti (stessa email + stesso telefono): duplicato certo, nessuna via d'uscita
   const hard = fake.addCompany({
     name: 'Agriturismo Il Poggio del Sole', domain: 'poggiodelsole.test', email_aziendale_principale: 'agriturismolamora@gmail.com',
@@ -680,6 +695,8 @@ async function run(context, site, fake) {
   check('ATTEMPTED_TO_CONTACT non mostrato come valore tecnico', !v.text.includes('ATTEMPTED_TO_CONTACT'));
   equal('duplicato certo: nessuna scrittura', writes().length, writesBeforeHard);
   await panel.locator('section.hubspot').screenshot({ path: path.join(OUT, '5c-duplicato-certo.png') });
+  // il record «Agriturismo La Mora» serviva solo qui: lo stesso nome tornerebbe nel prossimo prospect
+  fake.state.companies.splice(fake.state.companies.findIndex((c) => c.id === sameSite), 1);
 
   console.log('\nHubSpot REALE: azienda già presente (Cantina Rossi) e contatto già presente');
   const existingCompany = fake.addCompany({ name: 'Cantina Rossi', domain: 'cantinarossi.test', city: 'Foligno', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'NEW' });

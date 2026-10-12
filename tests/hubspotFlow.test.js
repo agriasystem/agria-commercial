@@ -470,3 +470,24 @@ test('una sola email in comune: possibile duplicato, si crea solo dopo la confer
   assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).outcome, 'created');
   assert.equal(posts(COMPANIES).length, 1);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Patch 2.0.2: stesso sito web + stesso nome = duplicato certo
+
+test('stesso sito + stesso nome: trovato dalla ricerca sul sito, duplicato certo senza conferma possibile', async () => {
+  const { fake, call, posts } = await setup();
+  const id = fake.addCompany({ name: 'Il Poggio del Sole', domain: 'vecchio-poggio.it', website: 'https://www.test-fallback-scout.invalid/' });
+  const res = await call('verifyCompany', { company: POGGIO });
+  assert.deepEqual([res.outcome, res.matches[0].id, res.matches[0].level, res.matches[0].reasons], ['certain', id, 'certain', ['website', 'name_city']]);
+  assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).error.code, 'duplicate', 'nessuna conferma lo sblocca');
+  assert.equal(posts(COMPANIES).length, 0);
+});
+
+test('stesso sito + nome diverso: possibile duplicato, si crea solo dopo la conferma', async () => {
+  const { fake, call, posts } = await setup();
+  const id = fake.addCompany({ name: 'Osteria del Ponte', domain: 'osteriadelponte.it', website: 'test-fallback-scout.invalid' });
+  const res = await call('verifyCompany', { company: POGGIO });
+  assert.deepEqual([res.outcome, res.matches[0].level, res.matches[0].reasons], ['possible', 'strong', ['website']]);
+  assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).outcome, 'created');
+  assert.equal(posts(COMPANIES).length, 1);
+});

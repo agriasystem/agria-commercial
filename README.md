@@ -90,7 +90,9 @@ eliminala o ruotala anche in HubSpot.
         secondaria), telefono normalizzato e sito web coerente col dominio;
      3. stessa **email** + nome fortemente coerente (stessa parte distintiva del nome, senza forme
         societarie e parole generiche come «Agriturismo», «Cantina», «S.r.l.»);
-     4. stesso **telefono** + nome fortemente coerente.
+     4. stesso **telefono** + nome fortemente coerente;
+     5. stesso **sito web** normalizzato + nome fortemente coerente.
+     La prima ricerca cerca dominio, sito web (nelle forme più comuni), email e telefono.
    - **⚠ Possibile duplicato** (revisione manuale) solo per segnali più deboli: una sola email o un
      solo telefono (o solo il sito) in comune, stesso nome nella stessa città, nome simile nella
      stessa città. Solo qui compare «Ho controllato in HubSpot: è un'azienda diversa».

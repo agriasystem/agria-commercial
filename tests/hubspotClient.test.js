@@ -107,10 +107,12 @@ test('ricerca doppioni azienda: dominio (anche con www.), email e telefono in OR
   const [strong, byName] = fake.state.requests;
   assert.equal(strong.path, '/crm/objects/2026-09/companies/search');
   const groups = strong.body.filterGroups.map((g) => g.filters[0]);
-  assert.deepEqual(groups.map((f) => [f.propertyName, f.operator]), [['domain', 'IN'], ['email_aziendale_principale', 'IN'], ['email_aziendale_secondaria', 'IN'], ['phone', 'IN']]);
+  assert.deepEqual(groups.map((f) => [f.propertyName, f.operator]), [['domain', 'IN'], ['website', 'IN'], ['email_aziendale_principale', 'IN'], ['email_aziendale_secondaria', 'IN'], ['phone', 'IN']]);
+  assert.ok(strong.body.filterGroups.length <= 5, 'al massimo 5 gruppi (limite HubSpot)');
   assert.deepEqual(groups[0].values, ['cantinarossi.it', 'www.cantinarossi.it']);
-  assert.deepEqual(groups[1].values, ['info@cantinarossi.it']);
-  assert.ok(groups[3].values.includes('0742 123456') && groups[3].values.includes('+390742123456'));
+  assert.ok(['https://www.cantinarossi.it/', 'http://cantinarossi.it', 'www.cantinarossi.it', 'cantinarossi.it/'].every((w) => groups[1].values.includes(w)));
+  assert.deepEqual(groups[2].values, ['info@cantinarossi.it']);
+  assert.ok(groups[4].values.includes('0742 123456') && groups[4].values.includes('+390742123456'));
   assert.ok(groups.every((f) => f.values.every((v) => v === v.toLowerCase())), 'valori IN in minuscolo, come chiede HubSpot');
   assert.ok(strong.body.properties.includes('hubspot_owner_id') && strong.body.properties.includes('hs_lead_status'));
   assert.equal(byName.body.query, 'rossi', 'seconda ricerca: la parola più distintiva del nome');
