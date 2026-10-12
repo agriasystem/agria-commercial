@@ -652,6 +652,35 @@ async function run(context, site, fake) {
   equal('race: nessuna scrittura', writes().length, postsBefore);
   check('race: nessun pulsante di creazione', await panel.isHidden('#company-step'));
 
+  console.log('\nHubSpot REALE: gravità dei doppioni (La Mora, dominio diverso)');
+  // un solo segnale (stesso telefono): possibile duplicato, si crea solo dopo la conferma
+  const sharedPhone = fake.addCompany({ name: 'Locanda Vecchia', domain: 'locandavecchia.test', phone: '393 4363917', hs_lead_status: 'CONNECTED' });
+  r = await deepScan(lamora);
+  equal('scansione completata', r.state, 'ok');
+  v = await verify();
+  equal('solo telefono: possibile duplicato', v.kind, 'warn');
+  includes('solo telefono: «⚠ Possibile duplicato»', v.text, '⚠ Possibile duplicato');
+  includes('solo telefono: motivo', v.text, 'stesso telefono');
+  includes('Lead Status CONNECTED → «In contatto»', v.text, 'Lead Status: In contatto');
+  check('possibile duplicato: conferma presente', await panel.isVisible('#ack-duplicate'));
+  check('possibile duplicato: «Crea» bloccato finché non si conferma', await panel.isDisabled('#create-company'));
+  await panel.check('#ack-duplicate');
+  check('possibile duplicato: dopo la conferma si può creare', await panel.isEnabled('#create-company'));
+  // due identificatori forti (stessa email + stesso telefono): duplicato certo, nessuna via d'uscita
+  const hard = fake.addCompany({
+    name: 'Agriturismo Il Poggio del Sole', domain: 'poggiodelsole.test', email_aziendale_principale: 'agriturismolamora@gmail.com',
+    phone: '+39 393 436 3917', hs_lead_status: 'ATTEMPTED_TO_CONTACT', hubspot_owner_id: MATTEO.hubspotOwnerId,
+  });
+  const writesBeforeHard = writes().length;
+  v = await verify();
+  equal('stessa email + stesso telefono: duplicato certo', v.kind, 'found');
+  for (const part of ['⛔ Azienda già presente in HubSpot', 'Duplicato certo', 'Agriturismo Il Poggio del Sole', `Record ID ${hard}`, 'stessa email', 'stesso telefono', 'Lead Status: Primo contatto inviato', `Proprietario: ${MATTEO.name}`, `Record ID ${sharedPhone}`]) includes(`duplicato certo: ${part}`, v.text, part);
+  check('duplicato certo: nessuna casella di conferma', !(await panel.$('#ack-duplicate')));
+  check('duplicato certo: nessun pulsante «Crea Azienda»', !(await panel.$('#create-company')) && await panel.isHidden('#company-step'));
+  check('ATTEMPTED_TO_CONTACT non mostrato come valore tecnico', !v.text.includes('ATTEMPTED_TO_CONTACT'));
+  equal('duplicato certo: nessuna scrittura', writes().length, writesBeforeHard);
+  await panel.locator('section.hubspot').screenshot({ path: path.join(OUT, '5c-duplicato-certo.png') });
+
   console.log('\nHubSpot REALE: azienda già presente (Cantina Rossi) e contatto già presente');
   const existingCompany = fake.addCompany({ name: 'Cantina Rossi', domain: 'cantinarossi.test', city: 'Foligno', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'NEW' });
   const existingContact = fake.addContact({ firstname: 'Mario', lastname: 'Rossi', email: 'mario.rossi@cantinarossi.test', hubspot_owner_id: ALESSANDRO.hubspotOwnerId });
@@ -659,7 +688,7 @@ async function run(context, site, fake) {
   equal('scansione completata', r.state, 'ok');
   v = await verify();
   equal('azienda esistente: bloccata', v.kind, 'found');
-  for (const part of ['⛔ Azienda già presente in HubSpot', 'Cantina Rossi', 'Dominio: cantinarossi.test', 'Città: Foligno', 'Proprietario: Alessandro Poponi', 'Lead Status: Da contattare (NEW)', `Record ID ${existingCompany}`, 'stesso dominio']) includes(`già presente: ${part}`, v.text, part);
+  for (const part of ['⛔ Azienda già presente in HubSpot', 'Cantina Rossi', 'Dominio: cantinarossi.test', 'Città: Foligno', 'Proprietario: Alessandro Poponi', 'Lead Status: Da contattare', `Record ID ${existingCompany}`, 'stesso dominio']) includes(`già presente: ${part}`, v.text, part);
   equal('«Apri in HubSpot»: link dato dall\'API', await panel.$eval('#verify-result a.src', (a) => a.href), `https://app-eu1.hubspot.com/contacts/149362651/record/0-2/${existingCompany}`);
   check('nessuna possibilità di creare un doppione certo', await panel.isHidden('#company-step') && !(await panel.$('#create-company')));
   equal('contatto per l\'azienda esistente', (await text('#create-contact')).trim(), 'Crea Contatto e associa a questa Azienda');

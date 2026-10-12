@@ -82,15 +82,27 @@ eliminala o ruotala anche in HubSpot.
 1. **Scansione** del sito, controllo dei form.
 2. **Verifica HubSpot** (sola lettura). HubSpot non garantisce la deduplica delle aziende create
    via API, quindi Scout controlla sempre prima:
-   - **dominio** normalizzato (minuscolo, senza protocollo, `www.` e barre finali; sottodomini
-     diversi restano diversi) → **⛔ Azienda già presente**: creazione bloccata, senza eccezioni;
-   - **email aziendale** (principale o secondaria) o **telefono** normalizzato → doppione forte;
-   - se non c'è altro: **nome** (senza forme societarie e parole generiche come «Agriturismo»,
-     «Cantina», «S.r.l.») **nella stessa città** → **⚠ Possibile duplicato**.
+   - **⛔ Azienda già presente in HubSpot** (duplicato certo: blocco assoluto, nessuna casella di
+     conferma, nessun pulsante di creazione) se vale almeno una di queste:
+     1. stesso **dominio** normalizzato (minuscolo, senza protocollo, `www.` e barre finali;
+        sottodomini diversi restano diversi);
+     2. almeno **due identificatori forti** in comune tra email aziendale (principale o
+        secondaria), telefono normalizzato e sito web coerente col dominio;
+     3. stessa **email** + nome fortemente coerente (stessa parte distintiva del nome, senza forme
+        societarie e parole generiche come «Agriturismo», «Cantina», «S.r.l.»);
+     4. stesso **telefono** + nome fortemente coerente.
+   - **⚠ Possibile duplicato** (revisione manuale) solo per segnali più deboli: una sola email o un
+     solo telefono (o solo il sito) in comune, stesso nome nella stessa città, nome simile nella
+     stessa città. Solo qui compare «Ho controllato in HubSpot: è un'azienda diversa».
 
-   Per doppioni forti e possibili Scout mostra i record (nome, dominio, città, proprietario,
-   Lead Status, Record ID) e non crea nulla finché il commerciale non conferma «Ho controllato in
-   HubSpot: è un'azienda diversa». Confronto deterministico, nessuna AI.
+   Scout mostra i record trovati (nome, dominio, città, proprietario, Lead Status, Record ID, motivi)
+   e non crea nulla senza conferma. Il blocco del duplicato certo vale anche nel service worker:
+   nessun messaggio può sbloccarlo. Confronto deterministico, nessuna AI.
+
+   Lead Status mostrato con le etichette del portale Agria (solo in interfaccia, i valori API restano
+   quelli di HubSpot): `NEW` Da contattare · `ATTEMPTED_TO_CONTACT` Primo contatto inviato ·
+   `CONNECTED` In contatto · `OPEN_DEAL` Opportunità aperta · `BAD_TIMING` Da ricontattare ·
+   `UNQUALIFIED` Non da lavorare.
 3. **Crea Azienda in HubSpot**: anteprima dei dati, poi un clic. Solo proprietà compilate;
    `hubspot_owner_id` = commerciale attivo; `hs_lead_status` = `NEW`; niente
    `tipo_struttura_hospitality` fuori dall'Hospitality. **Subito prima della scrittura Scout ripete

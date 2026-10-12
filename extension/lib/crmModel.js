@@ -17,6 +17,17 @@ export const TIPO_STRUTTURA_OPTIONS = [
   'Struttura con ristorante', 'Struttura con spa', 'Altro',
 ];
 export const LEAD_STATUS = Object.freeze({ value: 'NEW', label: 'Da contattare' });
+// etichette del portale Agria per hs_lead_status: solo per mostrarle, i valori API restano quelli
+export const LEAD_STATUS_LABELS = Object.freeze({
+  NEW: 'Da contattare',
+  ATTEMPTED_TO_CONTACT: 'Primo contatto inviato',
+  CONNECTED: 'In contatto',
+  OPEN_DEAL: 'Opportunità aperta',
+  BAD_TIMING: 'Da ricontattare',
+  UNQUALIFIED: 'Non da lavorare',
+});
+/** "ATTEMPTED_TO_CONTACT" → "Primo contatto inviato"; un valore sconosciuto resta com'è. */
+export const leadStatusLabel = (value) => LEAD_STATUS_LABELS[value] || String(value || '');
 export const LEGAL_BASIS = 'Legitimate interest – prospect/lead';
 
 // proprietà nell'ordine del form HubSpot; label = testo mostrato al commerciale;

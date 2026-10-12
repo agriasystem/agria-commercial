@@ -426,3 +426,47 @@ test('MOCK: stesso flusso simulato, nessuna rete e nessuna chiave', async () => 
   const broken = await setup({ mode: 'mock', key: null, mockScenario: 'error' });
   assert.equal((await broken.call('verifyCompany', { company: COMPANY })).error.code, 'mock_error');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Patch 2.0.1: un duplicato certo non ha conferma possibile
+
+const POGGIO = Object.freeze({
+  ...COMPANY, name: 'Agriturismo Il Poggio del Sole', domain: 'test-fallback-scout.invalid', website: '', city: 'Siena',
+  email_aziendale_principale: 'info@poggiodelsole.it', phone: '+39 0577 123456', settore_agria: 'Hospitality',
+});
+
+test('caso reale: dominio diverso ma stessa email e stesso telefono → duplicato certo, creazione impossibile', async () => {
+  const { fake, call, posts } = await setup();
+  const id = fake.addCompany({ name: 'Agriturismo Il Poggio del Sole', domain: 'poggiodelsole.it', email_aziendale_principale: 'info@poggiodelsole.it', phone: '0577 123456', city: 'Siena', hs_lead_status: 'ATTEMPTED_TO_CONTACT' });
+  const res = await call('verifyCompany', { company: POGGIO });
+  assert.deepEqual([res.outcome, res.matches[0].id, res.matches[0].level], ['certain', id, 'certain']);
+  assert.deepEqual(res.matches[0].reasons.slice(0, 2), ['email', 'phone']);
+  assert.equal(res.matches[0].leadStatus, 'ATTEMPTED_TO_CONTACT', 'il valore API resta quello di HubSpot');
+  // nemmeno una conferma forzata nel messaggio lo sblocca
+  const forced = await call('createCompany', { company: POGGIO, acknowledged: [id] });
+  assert.deepEqual([forced.ok, forced.error.code, forced.error.message], [false, 'duplicate', MESSAGES.certain]);
+  assert.equal(posts(COMPANIES).length, 0);
+});
+
+test('stessa email + stesso nome, stesso telefono + stesso nome: duplicato certo', async () => {
+  for (const props of [
+    { name: 'Il Poggio del Sole S.r.l.', domain: 'altro.it', email_aziendale_secondaria: 'info@poggiodelsole.it' },
+    { name: 'POGGIO DEL SOLE', domain: 'altro.it', phone: '+390577123456', city: 'Firenze' },
+  ]) {
+    const { fake, call, posts } = await setup();
+    const id = fake.addCompany(props);
+    assert.equal((await call('verifyCompany', { company: POGGIO })).outcome, 'certain', JSON.stringify(props));
+    assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).error.code, 'duplicate');
+    assert.equal(posts(COMPANIES).length, 0);
+  }
+});
+
+test('una sola email in comune: possibile duplicato, si crea solo dopo la conferma', async () => {
+  const { fake, call, posts } = await setup();
+  const id = fake.addCompany({ name: 'Altra Insegna', domain: 'altro.it', email_aziendale_principale: 'info@poggiodelsole.it' });
+  const res = await call('verifyCompany', { company: POGGIO });
+  assert.deepEqual([res.outcome, res.matches[0].level], ['possible', 'strong']);
+  assert.equal((await call('createCompany', { company: POGGIO })).error.code, 'duplicate', 'senza conferma no');
+  assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).outcome, 'created');
+  assert.equal(posts(COMPANIES).length, 1);
+});

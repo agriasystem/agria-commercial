@@ -9,7 +9,7 @@ import { el } from './render.js';
 import {
   clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, updateHubspot,
 } from '../lib/draft.js';
-import { LEAD_STATUS } from '../lib/crmModel.js';
+import { leadStatusLabel } from '../lib/crmModel.js';
 import { MOCK_SCENARIOS } from '../lib/config.js';
 import { REASON_LABELS } from '../lib/hubspotDuplicates.js';
 import { AUDIT_ITEM, MESSAGE, STATUS_CHANGED } from '../lib/hubspotMessages.js';
@@ -23,7 +23,9 @@ const time = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
-const leadLabel = (v) => (v === LEAD_STATUS.value ? `${LEAD_STATUS.label} (${v})` : v || '—');
+// nei record trovati l'etichetta del portale; nell'anteprima anche il valore che si scrive
+const leadLabel = (v) => leadStatusLabel(v) || '—';
+const leadValue = (v) => (leadStatusLabel(v) !== v ? `${leadStatusLabel(v)} (${v})` : v);
 const ownerLabel = (id, name = '') => name || operatorById(id)?.name || (id ? `ID owner ${id}` : '—');
 const link = (url, text) => (/^https:\/\//.test(url || '') ? el('a', { class: 'src', href: url, target: '_blank', rel: 'noopener noreferrer' }, text) : null);
 const lines = (text) => String(text || '').split('\n').filter(Boolean).map((l) => el('p', {}, l));
@@ -44,7 +46,7 @@ function recordCard(m, kind) {
 function preview(properties) {
   const value = (name, v) => {
     if (name === 'hubspot_owner_id') return `${ownerLabel(v)} (${v})`;
-    if (name === 'hs_lead_status') return leadLabel(v);
+    if (name === 'hs_lead_status') return leadValue(v);
     return v.length > 160 ? `${v.slice(0, 160)}…` : v;
   };
   return el('dl', { class: 'preview' }, ...Object.entries(properties).flatMap(([k, v]) => [
@@ -165,9 +167,9 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
     }
     const cards = v.matches.map((m) => recordCard(m, 'company'));
     if (v.outcome === 'none') return show('not_found', '✓ Non presente in HubSpot', el('p', {}, 'Nessuna azienda con lo stesso dominio, email, telefono o nome e città.'));
-    if (v.outcome === 'possible') return show('warn', '⚠ Possibile duplicato', el('p', {}, 'Possibile azienda già presente: controlla in HubSpot prima di creare.'), ...cards);
+    if (v.outcome === 'possible') return show('warn', '⚠ Possibile duplicato', el('p', {}, 'Possibile azienda già presente (un solo segnale): controlla in HubSpot prima di creare.'), ...cards);
     if (v.outcome === 'race') return show('found', '⛔ Azienda già presente in HubSpot', el('p', {}, v.message), ...cards);
-    return show('found', '⛔ Azienda già presente in HubSpot', el('p', {}, 'Nessuna nuova azienda verrà creata: lavora sul record esistente.'), ...cards);
+    return show('found', '⛔ Azienda già presente in HubSpot', el('p', {}, 'Duplicato certo: nessuna nuova azienda verrà creata. Lavora sul record esistente.'), ...cards);
   }
 
   function renderCompanyStep(st) {

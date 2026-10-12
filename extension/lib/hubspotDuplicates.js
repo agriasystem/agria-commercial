@@ -1,11 +1,14 @@
 // Doppioni in HubSpot: corpi delle ricerche e confronto deterministico dei risultati.
 // Funzioni pure, nessuna rete: il client (hubspotClient.js) invia le ricerche, qui si decide.
 //
-// Azienda
-//   - CERTO:    stesso dominio normalizzato (minuscolo, senza protocollo, "www." e barre finali;
-//               sottodomini diversi restano diversi). La creazione è bloccata, senza eccezioni.
-//   - FORTE:    stessa email aziendale (principale o secondaria) o stesso telefono normalizzato.
-//   - POSSIBILE: stesso nome (senza forme societarie e parole generiche) nella stessa città.
+// Azienda (vedi companyLevel)
+//   - CERTO, blocco assoluto, nessuna conferma possibile:
+//       stesso dominio normalizzato (minuscolo, senza protocollo, "www." e barre finali; sottodomini
+//       diversi restano diversi); oppure almeno DUE identificatori forti tra email aziendale,
+//       telefono normalizzato e sito web coerente col dominio; oppure email o telefono + stesso nome.
+//   - FORTE:    un solo identificatore forte (email, telefono o sito), senza altri segnali.
+//   - POSSIBILE: solo il nome: stesso nome nella stessa città, o nome simile nella stessa città.
+//   Forte e possibile si mostrano come «possibile duplicato»: il commerciale controlla e conferma.
 // Contatto, in quest'ordine: email, telefono, cellulare, LinkedIn. Un contatto trovato non si crea.
 
 import { normalizeDomain, normalizeEmail, normalizeLinkedin, normalizePhone, normKey } from './validation.js';
@@ -158,6 +161,31 @@ export function safeRecordUrl(url, id) {
   }
 }
 
+// nome simile ma non conclusivo: le parole distintive dell'uno tutte nell'altro (almeno 5 lettere)
+function similarName(a, b) {
+  if (!a || !b || a === b) return false;
+  const [small, big] = a.length <= b.length ? [a, b] : [b, a];
+  const bigWords = new Set(big.split(' '));
+  return small.replace(/ /g, '').length >= 5 && small.split(' ').every((w) => bigWords.has(w));
+}
+
+/**
+ * Gravità di un record trovato, dai motivi della corrispondenza → 'certain' | 'strong' | 'possible' | ''.
+ *   certain: dominio; oppure due identificatori forti (email, telefono, sito web); oppure email o
+ *            telefono + nome fortemente coerente (stessa parte distintiva, anche in un'altra città)
+ *   strong:  un solo identificatore forte
+ *   possible: solo il nome (stesso nome e città, o nome simile nella stessa città)
+ */
+export function companyLevel(reasons) {
+  const has = (r) => reasons.includes(r);
+  const identifiers = ['email', 'phone', 'website'].filter(has).length;
+  const sameName = has('name') || has('name_city');
+  if (has('domain') || identifiers >= 2 || ((has('email') || has('phone')) && sameName)) return LEVEL.certain;
+  if (identifiers === 1) return LEVEL.strong;
+  if (has('name_city') || has('name_similar')) return LEVEL.possible;
+  return '';
+}
+
 /**
  * Risultati delle ricerche → { outcome: 'none' | 'possible' | 'certain', matches }.
  * Ogni record è confrontato di nuovo qui: la ricerca di HubSpot serve solo a trovare i candidati.
@@ -169,12 +197,16 @@ export function classifyCompanies(company, records) {
     const p = record?.properties || {};
     const reasons = [];
     if (k.domain && normalizeDomain(p.domain || '') === k.domain) reasons.push('domain');
+    else if (k.domain && normalizeDomain(p.website || '') === k.domain) reasons.push('website');
     const theirEmails = [p.email_aziendale_principale, p.email_aziendale_secondaria].map(normalizeEmail);
     if (k.emails.some((e) => theirEmails.includes(e))) reasons.push('email');
     if (k.phone && normalizePhone(p.phone || '') === k.phone) reasons.push('phone');
-    if (k.core && companyCore(p.name) === k.core && (!k.city || !normKey(p.city) || normKey(p.city) === k.city)) reasons.push('name_city');
-    if (!reasons.length || !record?.id) continue;
-    const level = reasons.includes('domain') ? LEVEL.certain : reasons.some((r) => r === 'email' || r === 'phone') ? LEVEL.strong : LEVEL.possible;
+    const core = companyCore(p.name);
+    const theirCity = normKey(p.city);
+    if (k.core && core === k.core) reasons.push(!k.city || !theirCity || theirCity === k.city ? 'name_city' : 'name');
+    else if (k.city && theirCity === k.city && similarName(k.core, core)) reasons.push('name_similar');
+    const level = companyLevel(reasons);
+    if (!level || !record?.id) continue;
     const current = byId.get(String(record.id));
     if (!current || LEVEL_RANK[level] < LEVEL_RANK[current.level]) byId.set(String(record.id), companySummary(record, { level, reasons }));
   }
@@ -224,7 +256,8 @@ export function classifyContacts(contact, records) {
 }
 
 export const REASON_LABELS = Object.freeze({
-  domain: 'stesso dominio', email: 'stessa email', phone: 'stesso telefono', mobilephone: 'stesso cellulare',
-  linkedin: 'stesso profilo LinkedIn', name_city: 'stesso nome e città',
+  domain: 'stesso dominio', website: 'stesso sito web', email: 'stessa email', phone: 'stesso telefono',
+  mobilephone: 'stesso cellulare', linkedin: 'stesso profilo LinkedIn', name_city: 'stesso nome e città',
+  name: 'stesso nome', name_similar: 'nome simile, stessa città',
 });
 

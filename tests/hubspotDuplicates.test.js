@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   classifyCompanies, classifyContacts, companyCore, companyKeys, contactSearch, linkedinVariants, phoneVariants, safeRecordUrl,
 } from '../extension/lib/hubspotDuplicates.js';
+import { leadStatusLabel } from '../extension/lib/crmModel.js';
 
 const rec = (id, properties) => ({ id, properties });
 
@@ -71,4 +72,60 @@ test("link al record: solo quello dato dall'API, su hubspot.com e per quel recor
   assert.equal(safeRecordUrl('http://app.hubspot.com/contacts/1/record/0-2/123', '123'), '', 'solo https');
   assert.equal(safeRecordUrl('javascript:alert(1)//123', '123'), '');
   assert.equal(safeRecordUrl(undefined, '123'), '', 'nessun URL costruito a mano');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Patch 2.0.1: gravità dei doppioni
+
+const OURS = Object.freeze({
+  name: 'Agriturismo Il Poggio del Sole', domain: 'test-fallback-scout.invalid', email_aziendale_principale: 'info@poggiodelsole.it',
+  phone: '+39 0577 123456', city: 'Siena',
+});
+const levelOf = (props, company = OURS) => {
+  const { outcome, matches } = classifyCompanies(company, [rec('1', props)]);
+  return [outcome, matches[0]?.level || '', matches[0]?.reasons || []];
+};
+
+test('stesso dominio => duplicato certo', () => {
+  assert.deepEqual(levelOf({ name: 'Tutt\'altro nome', domain: 'www.test-fallback-scout.invalid' }), ['certain', 'certain', ['domain']]);
+});
+
+test('stessa email + stesso telefono => duplicato certo (caso reale: dominio diverso)', () => {
+  const props = { name: 'Agriturismo Il Poggio del Sole', domain: 'poggiodelsole.it', email_aziendale_principale: 'INFO@poggiodelsole.it', phone: '0577 123456', city: 'Siena', hs_lead_status: 'ATTEMPTED_TO_CONTACT' };
+  assert.deepEqual(levelOf(props), ['certain', 'certain', ['email', 'phone', 'name_city']]);
+  // anche con un nome diverso: due identificatori forti bastano
+  assert.deepEqual(levelOf({ ...props, name: 'Altra Insegna' }), ['certain', 'certain', ['email', 'phone']]);
+});
+
+test('stessa email + stesso nome => certo; stesso telefono + stesso nome => certo (anche in un\'altra città)', () => {
+  assert.deepEqual(levelOf({ name: 'Il Poggio del Sole S.r.l.', email_aziendale_secondaria: 'info@poggiodelsole.it', city: 'Siena' }), ['certain', 'certain', ['email', 'name_city']]);
+  assert.deepEqual(levelOf({ name: 'Poggio del Sole', phone: '+390577123456', city: 'Montalcino' }), ['certain', 'certain', ['phone', 'name']]);
+});
+
+test('sito web coerente col dominio: identificatore forte (da solo possibile, con l\'email certo)', () => {
+  assert.deepEqual(levelOf({ name: 'Altro', domain: 'vecchio-dominio.it', website: 'https://www.test-fallback-scout.invalid/' }), ['possible', 'strong', ['website']]);
+  assert.deepEqual(levelOf({ name: 'Altro', website: 'test-fallback-scout.invalid', email_aziendale_principale: 'info@poggiodelsole.it' }), ['certain', 'certain', ['website', 'email']]);
+});
+
+test('solo email => possibile; solo telefono => possibile; nome + città => possibile; nome simile => possibile', () => {
+  assert.deepEqual(levelOf({ name: 'Altra Insegna', email_aziendale_principale: 'info@poggiodelsole.it' }), ['possible', 'strong', ['email']]);
+  assert.deepEqual(levelOf({ name: 'Altra Insegna', phone: '0577-123456' }), ['possible', 'strong', ['phone']]);
+  assert.deepEqual(levelOf({ name: 'POGGIO DEL SOLE', domain: 'altro.it', city: 'SIENA' }), ['possible', 'possible', ['name_city']]);
+  assert.deepEqual(levelOf({ name: 'Relais Poggio del Sole Toscana', domain: 'altro.it', city: 'Siena' }), ['possible', 'possible', ['name_similar']]);
+  // nomi simili in città diverse, o stesso nome in un'altra città senza altri segnali: niente
+  assert.deepEqual(levelOf({ name: 'Relais Poggio del Sole Toscana', city: 'Pisa' }), ['none', '', []]);
+  assert.deepEqual(levelOf({ name: 'Il Poggio del Sole', city: 'Pisa' }), ['none', '', []]);
+});
+
+test('un duplicato certo prevale: il risultato è «certo» anche se ci sono altri candidati deboli', () => {
+  const res = classifyCompanies(OURS, [rec('2', { name: 'Altro', phone: '0577 123456' }), rec('3', { name: 'X', email_aziendale_principale: 'info@poggiodelsole.it', phone: '0577 123456' })]);
+  assert.deepEqual([res.outcome, res.matches.map((m) => [m.id, m.level])], ['certain', [['3', 'certain'], ['2', 'strong']]]);
+});
+
+test('Lead Status: etichette del portale solo in interfaccia', () => {
+  assert.equal(leadStatusLabel('ATTEMPTED_TO_CONTACT'), 'Primo contatto inviato');
+  assert.deepEqual(['NEW', 'CONNECTED', 'OPEN_DEAL', 'BAD_TIMING', 'UNQUALIFIED'].map(leadStatusLabel),
+    ['Da contattare', 'In contatto', 'Opportunità aperta', 'Da ricontattare', 'Non da lavorare']);
+  assert.equal(leadStatusLabel('IN_PROGRESS'), 'IN_PROGRESS', 'un valore sconosciuto resta com\'è');
+  assert.equal(leadStatusLabel(''), '');
 });
