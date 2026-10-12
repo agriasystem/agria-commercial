@@ -15,6 +15,7 @@ import {
   buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, isContactReady, isPropVisible, proposeCompany, proposeContact,
   proposeStructureFor,
 } from './crmModel.js';
+import { companyPayload, lostFields, PREFLIGHT_MESSAGE } from './hubspotPayload.js';
 import { requireOperator } from './operators.js';
 import { addFailure, addPageFindings, emptySite, peopleOf } from './siteData.js';
 
@@ -144,13 +145,18 @@ function syncLegalBasis(draft) {
   if (!contactReady(draft)) draft.legalBasisConfirmed = false;
 }
 
+// valori scelti a mano che cambiano le altre proposte (email già usate, settore per il tipo di struttura)
+function fixedOf(draft) {
+  const fixed = {};
+  for (const prop of EMAIL_PROPS) if (draft.company[prop].edited && draft.company[prop].value) fixed[prop] = draft.company[prop].value;
+  if (draft.company.settore_agria.edited) fixed.settore_agria = draft.company.settore_agria.value;
+  return fixed;
+}
+
 /** Ricalcola le proposte dai dati del sito. */
 export function refreshForms(draft) {
   const next = structuredClone(draft);
-  const fixed = {};
-  for (const prop of EMAIL_PROPS) if (next.company[prop].edited && next.company[prop].value) fixed[prop] = next.company[prop].value;
-  if (next.company.settore_agria.edited) fixed.settore_agria = next.company.settore_agria.value;
-  const company = proposeCompany(next.site, { fixed });
+  const company = proposeCompany(next.site, { fixed: fixedOf(next) });
   for (const { name } of draftProps(COMPANY_PROPS)) if (name !== 'hs_quick_context') mergeField(next.company[name], company[name]);
   const { fields, mainKey } = proposeContact(next.site, next.mainPersonChosen ? next.mainPerson : null);
   next.mainPerson = mainKey;
@@ -252,6 +258,26 @@ export function restoreDraft(raw) {
   } catch {
     return emptyDraft();
   }
+}
+
+/**
+ * Pre-flight prima di «Crea Azienda in HubSpot»: ogni dato del modello finale deve arrivare nel payload.
+ * Modello finale = il form; per un campo non corretto a mano anche la proposta ricavata dal sito, così
+ * un valore trovato (es. state = Umbria) non può perdersi per strada. Un campo svuotato a mano, o un
+ * dato mai trovato, non blocca nulla. → { ok, missing: [etichette], message }
+ */
+export function preflightCompany(draft, operator) {
+  const { hubspotOwnerId } = requireOperator(operator);
+  const record = crmRecords(draft, operator).company;
+  const { properties, invalid } = companyPayload(record, operator);
+  const proposal = proposeCompany(draft.site, { fixed: fixedOf(draft) });
+  const model = { ...record };
+  for (const { name } of draftProps(COMPANY_PROPS)) {
+    const field = draft.company[name];
+    if (field && !field.edited && !field.value && proposal[name]?.value) model[name] = proposal[name].value;
+  }
+  const missing = lostFields(model, properties, { invalid, ownerId: hubspotOwnerId });
+  return { ok: missing.length === 0, missing, message: missing.length ? PREFLIGHT_MESSAGE : '' };
 }
 
 /**

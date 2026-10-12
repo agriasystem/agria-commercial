@@ -3,7 +3,7 @@
 
 import { emailCategory } from '../lib/parser.js';
 import { factsOf, missingForContact, peopleOf } from '../lib/siteData.js';
-import { contactPerson, personLine } from '../lib/crmModel.js';
+import { contactPerson, personLine, rankPeople, suggestedContact } from '../lib/crmModel.js';
 
 const PAGE_TYPES = {
   home: 'home', contact: 'contatti', about: 'chi siamo', team: 'team', legal: 'legale', hospitality: 'struttura', blog: 'blog', other: 'pagina',
@@ -99,8 +99,14 @@ export function contactReadiness(contact) {
 }
 
 /** Schede delle persone rilevate, con evidenza e pulsante per farne il Contatto principale. */
-export function peopleCards(site, mainKey, onUse) {
-  return peopleOf(site).map((p) => {
+/**
+ * Schede delle persone, in ordine di rilevanza commerciale (company: valori del form Azienda, per i
+ * segnali). L'ordine e il «Contatto suggerito» non cambiano il Contatto: lo sceglie il commerciale.
+ */
+export function peopleCards(site, mainKey, onUse, company = {}) {
+  const ranked = rankPeople(site, company);
+  const suggested = suggestedContact(ranked);
+  return ranked.map((p) => {
     const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
     const contacts = [
       p.email && ['Email', p.email],
@@ -114,12 +120,18 @@ export function peopleCards(site, mainKey, onUse) {
     const status = p.partial
       ? [el('p', { class: 'person-tags' }, el('span', { class: 'chip check' }, 'Persona parziale')), el('p', { class: 'person-warn' }, 'Cognome non trovato')]
       : [missing.length ? el('p', { class: 'person-warn' }, `Non utilizzabile come Contatto HubSpot: manca ${missing.join(' e ')}.`) : null];
-    return el('article', { class: `person${main ? ' main' : ''}${p.partial ? ' partial' : ''}` },
+    const signals = p.commercialSignals.length
+      ? el('div', { class: 'signals' }, el('p', { class: 'signals-title' }, 'Segnali commerciali'),
+        el('ul', {}, ...p.commercialSignals.map((s) => el('li', {}, s.label))))
+      : null;
+    return el('article', { class: `person${main ? ' main' : ''}${p.partial ? ' partial' : ''}`, 'data-key': p.key },
       el('div', { class: 'person-head' },
         el('span', { class: 'n' }, name, p.role ? ` — ${p.role}` : ''),
-        badge(p.reliability)),
+        badge(p.reliability),
+        p.key === suggested ? el('span', { class: 'chip suggested' }, 'Contatto suggerito') : null),
       ...status,
       contacts.length ? el('p', { class: 'person-contacts' }, ...contacts.map(([k, v]) => el('span', {}, `${k} ${v}`))) : null,
+      signals,
       isWebUrl(p.linkedin) ? el('p', { class: 'person-contacts' }, el('a', { href: p.linkedin, target: '_blank', rel: 'noopener noreferrer' }, 'Profilo LinkedIn')) : null,
       el('p', { class: 'person-src' },
         'Fonte: ', ...sourceLinks(p.sources, 3),

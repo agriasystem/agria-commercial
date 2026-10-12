@@ -155,6 +155,11 @@ h1,h2,h3{margin:0;font-size:inherit}
 .person-tags{display:flex;gap:4px;flex-wrap:wrap}
 .person-src{color:var(--muted)}
 .person-main{color:var(--accent);font-weight:700}
+.chip.suggested{background:var(--info-bg);color:var(--info)}
+.signals{display:flex;flex-direction:column;gap:2px;font-size:12px}
+.signals-title{margin:0;font-weight:700;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+.signals ul{margin:0;padding-left:16px}
+.signals li{margin:1px 0}
 
 /* tutti i dati rilevati: diagnostica, chiusa all'inizio */
 .diag > summary{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;list-style:none}

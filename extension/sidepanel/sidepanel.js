@@ -180,7 +180,7 @@ function renderPeople() {
     renderPeople();
     hub.render();
     scheduleSave();
-  });
+  }, valuesOf(draft.company));
   $('#people-list').replaceChildren(...(cards.length ? cards : [el('p', { class: 'hint' }, 'Nessuna persona individuata finora.')]));
   $('#people-count').textContent = cards.length ? String(cards.length) : '';
 }
@@ -220,6 +220,8 @@ function afterEdit(section, name, { rerender = true } = {}) {
   renderField('company', PROPS.company.find((p) => p.name === 'hs_quick_context'));
   if (section === 'contact') renderReadiness();
   if (section === 'company' && DUPLICATE_KEYS.has(name)) hub.dataChanged();
+  // telefono ed email dell'azienda cambiano i segnali commerciali delle persone
+  if (section === 'company' && ['phone', 'email_aziendale_principale', 'email_aziendale_secondaria'].includes(name)) renderPeople();
   if (section === 'contact') hub.contactChanged();
   hub.render(); // anteprima dei dati da scrivere
   scheduleSave();

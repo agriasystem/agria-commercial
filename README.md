@@ -105,7 +105,11 @@ eliminala o ruotala anche in HubSpot.
    quelli di HubSpot): `NEW` Da contattare · `ATTEMPTED_TO_CONTACT` Primo contatto inviato ·
    `CONNECTED` In contatto · `OPEN_DEAL` Opportunità aperta · `BAD_TIMING` Da ricontattare ·
    `UNQUALIFIED` Non da lavorare.
-3. **Crea Azienda in HubSpot**: anteprima dei dati, poi un clic. Solo proprietà compilate;
+3. **Crea Azienda in HubSpot**: anteprima dei dati, poi un clic. **Pre-flight**: se un dato del
+   modello finale (il form, e per un campo non corretto a mano anche la proposta ricavata dal sito,
+   per esempio `state = Umbria`) non arriverebbe nel payload, la scrittura si blocca con «Alcuni dati
+   rilevati non sono stati trasferiti correttamente al modello HubSpot.» e l'elenco dei campi. Un dato
+   mai trovato o svuotato a mano non blocca. Solo proprietà compilate;
    `hubspot_owner_id` = commerciale attivo; `hs_lead_status` = `NEW`; niente
    `tipo_struttura_hospitality` fuori dall'Hospitality. **Subito prima della scrittura Scout ripete
    il controllo dei doppioni**: se nel frattempo un collega ha creato l'azienda → «L'azienda è stata
@@ -169,6 +173,15 @@ impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo
    *Cognome non trovato*), con recapiti, pagina e testo da cui sono state ricavate. Diventa Contatto
    in automatico solo chi ha **nome + cognome + almeno uno tra email, telefono e LinkedIn**; con
    «Usa come contatto» il commerciale può scegliere un'altra persona. Il cognome non si inventa mai.
+   Le schede sono in ordine di rilevanza commerciale e mostrano i **Segnali commerciali**:
+   osservazioni verificabili, mai deduzioni («Numero coincidente con il telefono principale
+   dell'azienda», «Numero coincidente con il WhatsApp aziendale», «Email coincidente con l'email
+   principale/secondaria dell'azienda», «Persona citata in più sezioni del sito» — almeno due pagine,
+   il footer ripetuto non conta —, «Ruolo commerciale esplicito: …» e «Ruolo decisionale esplicito: …»
+   solo se il ruolo è scritto così nel sito). L'ordine usa un peso interno mai mostrato; la prima
+   persona utilizzabile è il **Contatto suggerito**, ma il Contatto lo sceglie il commerciale e una
+   scelta a mano non cambia con una nuova scansione. Lo stesso numero può stare nel telefono
+   dell'Azienda e nel cellulare di una persona, se il sito lo pubblica in entrambi i contesti.
 5. **Tutti i dati rilevati** (diagnostica, chiusa all'inizio): email, telefoni, WhatsApp, persone,
    indirizzi, social, P.IVA, poi gli altri dati; ragione sociale, codice fiscale, REA, CIN e SDI in
    fondo, in «Dati legali (non usati in HubSpot)».
@@ -222,7 +235,8 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
 - `hs_quick_context`: informazioni operative trovate che non hanno un campo dedicato, in
   quest'ordine: **WHATSAPP**, **P.IVA**, **ULTERIORI EMAIL** (oltre principale e secondaria),
   **ULTERIORI TELEFONI** (non il principale, non il WhatsApp ripetuto), **POTENZIALI CONTATTI**
-  («Paolo — Host (cognome non trovato)»), **ALTRI CANALI** (social, fax, PEC), **ALTRE INFORMAZIONI
+  («Paolo — Host (cognome non trovato)», in ordine di rilevanza, con sotto i segnali in breve, per
+  esempio «Ruolo decisionale esplicito»; niente punteggi), **ALTRI CANALI** (social, fax, PEC), **ALTRE INFORMAZIONI
   COMMERCIALI UTILI** (booking engine, portali, prenotazione ristorante, e-commerce). Niente
   ragione sociale, REA, CIN, SDI, codice fiscale o sede legale; nessun valore ripetuto.
 
@@ -249,6 +263,19 @@ sociale, P.IVA con cifra di controllo, codice fiscale, REA, CIN, SDI, PEC, sede 
 intestazione, resto del testo. Valori uguali su più pagine diventano una voce sola con tutte le
 fonti; valori diversi restano tutti visibili, con il principale proposto e gli altri come
 alternative.
+
+**Località.** Indirizzi scritti «06081 Assisi (PG)» o «…, Magione - 06063 (PG) - ITALY». Se
+all'indirizzo principale manca la provincia, Scout la prende — con fonte ed evidenza — da un altro
+indirizzo della stessa città o con lo stesso CAP, da «Città (PR)» per la stessa città, oppure
+dall'unica provincia citata da sola nel sito («(PG)», «Provincia di Perugia»); con province diverse
+non sceglie, e la sede legale in un'altra città non conta. Regione dalla tabella fissa province →
+regioni (`lib/italy.js`); paese «Italia» da provincia o regione italiane, oppure da «ITALY»/«Italy»/
+«ITALIA» scritto nel sito. Niente geocoding, servizi esterni o AI.
+
+**Persone.** Oltre ai ruoli dell'elenco («Titolare», «Sommelier», «Host»…), anche ruoli scritti dal sito
+con parole proprie, in una scheda di contatto: «Export, vendite, acquisti, logistica: Giulio Brandelli
++39 349 5241724», «Ruolo - Nome Cognome telefono», «Nome Cognome — Ruolo — telefono», ruolo come
+intestazione con nome e telefono sotto. Titoli come «Dott.» davanti al nome sono ammessi.
 
 **Email attaccate ad altro testo.** Quando due elementi della pagina sono affiancati senza spazio,
 il testo può diventare «+39 393 4363917agriturismolamora@gmail.com». Scout non taglia cifre a caso
@@ -331,7 +358,9 @@ Milestone 2), prima in sola lettura.
 - Persone, settore e tipo di struttura sono riconosciuti con regole sul testo: per questo sono
   segnati *da verificare*. Impaginazioni insolite possono non dare un contatto o darne uno da correggere.
   Una persona citata col solo nome si riconosce se il nome è tra quelli comuni (`lib/names.js`)
-  ed è vicino a un ruolo («Paolo, host di…», «Host: Paolo», «Il vostro host è Paolo»).
+  ed è vicino a un ruolo («Paolo, host di…», «Host: Paolo», «Il vostro host è Paolo»). Con un ruolo
+  scritto con parole proprie (fuori elenco) servono un recapito subito dopo il nome e un nome di
+  battesimo tra quelli comuni: nomi rari in quel formato possono sfuggire.
 - Email attaccate ad altro testo: si riconosce il testo attaccato *davanti* (cifre di un telefono,
   etichette come «E-mail»); quello attaccato *dopo* il dominio («info@sito.itTel») non ancora.
 - Informative privacy ospitate su servizi esterni (es. iubenda) non vengono lette: sono su un

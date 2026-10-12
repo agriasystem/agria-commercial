@@ -55,6 +55,12 @@ const SITES = {
   // casi emersi dai test manuali sui siti reali (Milestone 1.1.1), riprodotti con dati di prova
   'lamora-caso.test': { '/': 'caso-lamora-home.html', '/chi-siamo': 'caso-lamora-chi-siamo.html' },
   'perticaia-caso.test': { '/': 'caso-perticaia.html', '/privacy-policy': 'caso-perticaia-privacy.html' },
+  // Patch 2.0.3: località su più formati e pagine, persone con ruoli scritti dal sito
+  'berioli-caso.test': {
+    '/': 'caso-berioli-home.html',
+    '/contatti/': 'caso-berioli-contatti.html', '/contatti': 'caso-berioli-contatti.html',
+    '/la-cantina/': 'caso-berioli-la-cantina.html', '/la-cantina': 'caso-berioli-la-cantina.html',
+  },
 };
 const [MATTEO, ALESSANDRO] = OPERATORS;
 // chiavi finte: il finto HubSpot accetta solo FAKE_KEY
@@ -537,6 +543,53 @@ async function run(context, site, fake) {
   check('contatto non valido: base giuridica nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
   includes('fornitore solo tra i dati legali', await panel.$eval('#all-data > .group.legal', (d) => d.textContent), 'Studio Web Esempio S.r.l.');
   await shot('3-caso-la-mora');
+
+  console.log('\nCaso reale Berioli: località da più formati, tre persone, segnali commerciali, pre-flight');
+  const berioli = await openTab(site('berioli-caso.test', '/'));
+  r = await deepScan(berioli);
+  equal('scansione completata', r.state, 'ok');
+  includes('tre pagine', await text('#summary'), '3 pagine');
+  includes('tre persone', await text('#summary'), '3 persone');
+  equal('nome azienda', await value('company-name'), 'Cantina Berioli');
+  equal('città', await value('company-city'), 'Magione');
+  equal('regione (da «(PG)»)', await value('company-state'), 'Umbria');
+  equal('paese (da «ITALY»)', await value('company-country'), 'Italia');
+  equal('telefono azienda', await value('company-phone'), '+39 345 258 6604');
+  const cards = await panel.$$eval('#people-list .person', (list) => list.map((c) => c.innerText));
+  equal('persone in ordine di rilevanza', JSON.stringify(cards.map((c) => c.split('\n')[0].split(' — ')[0])), JSON.stringify(['Roberto Berioli', 'Giulio Brandelli', 'Irene Rossi']));
+  for (const [i, parts] of [
+    [0, ['Roberto Berioli — Titolare', 'Contatto suggerito', 'Cell. +39 335 549 8173', 'SEGNALI COMMERCIALI', 'Ruolo decisionale esplicito: Titolare', 'Persona citata in più sezioni del sito']],
+    [1, ['Giulio Brandelli — Export, vendite, acquisti, logistica', 'Cell. +39 349 524 1724', 'Ruolo commerciale esplicito: Export, vendite, acquisti, logistica']],
+    [2, ['Irene Rossi — Sommelier', 'Cell. +39 345 258 6604', "Numero coincidente con il telefono principale dell'azienda"]],
+  ]) for (const part of parts) includes(`scheda ${i + 1}: ${part}`, cards[i], part);
+  check('un solo «Contatto suggerito»', cards.filter((c) => c.includes('Contatto suggerito')).length === 1);
+  check('nessun punteggio e nessuna deduzione nelle schede', !cards.some((c) => /punteggio|probabil|decision maker|\b(100|110|60|40)\b/i.test(c)), JSON.stringify(cards));
+  check('tutte e tre utilizzabili come Contatto', cards.every((c) => !c.includes('Non utilizzabile')));
+  equal('contatto proposto: Roberto', `${await value('contact-firstname')} ${await value('contact-lastname')} · ${await value('contact-mobilephone')}`, 'Roberto Berioli · +39 335 549 8173');
+  const quickBerioli = await value('company-hs_quick_context');
+  includes('contesto rapido: potenziali contatti con i segnali', quickBerioli, [
+    'POTENZIALI CONTATTI',
+    '- Roberto Berioli — Titolare',
+    '  Ruolo decisionale esplicito',
+    '- Giulio Brandelli — Export, vendite, acquisti, logistica',
+    '  Ruolo commerciale esplicito',
+    '- Irene Rossi — Sommelier',
+    "  Numero coincidente con il telefono principale dell'azienda",
+  ].join('\n'));
+  v = await verify();
+  equal('verifica (MOCK): non presente', v.kind, 'not_found');
+  const berioliPreview = await text('#company-step');
+  for (const part of ['Città', 'Magione', 'Regione', 'Umbria', 'Paese', 'Italia']) includes(`anteprima: ${part}`, berioliPreview, part);
+  check('pre-flight superato: nessun blocco', !(await panel.$('#preflight-error')) && await panel.isEnabled('#create-company'));
+  // scelta manuale: Irene, con lo stesso numero dell'azienda
+  await usePersonCard('Irene Rossi');
+  equal('Irene scelta a mano', `${await value('contact-firstname')} ${await value('contact-lastname')}`, 'Irene Rossi');
+  equal('Irene: cellulare', await value('contact-mobilephone'), '+39 345 258 6604');
+  equal('azienda: lo stesso numero resta', await value('company-phone'), '+39 345 258 6604');
+  r = await deepScan(berioli);
+  equal('nuova scansione: Irene resta il Contatto scelto', await value('contact-firstname'), 'Irene');
+  includes('il suggerimento resta su Roberto', await panel.$eval('#people-list .person', (c) => c.innerText), 'Contatto suggerito');
+  await panel.locator('section:has(#people-list)').screenshot({ path: path.join(OUT, '8-berioli-persone.png') });
 
   console.log('\nCaso reale Perticaia: alias funzionali, cantina, informativa privacy, contatto inserito a mano');
   const perticaia = await openTab(site('perticaia-caso.test', '/'));

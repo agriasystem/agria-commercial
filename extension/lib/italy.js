@@ -91,6 +91,12 @@ export function provinceFromName(name) {
   return PROVINCE_BY_NAME.get(normKey(name)) || '';
 }
 
+/** "ITALY", "Italy", "italia", "IT" → "Italia"; un altro paese resta com'è scritto (ripulito). */
+export function normalizeCountry(text) {
+  const v = String(text ?? '').replace(/\s+/g, ' ').trim();
+  return /^(it|ita|italy|italia)$/i.test(v) ? 'Italia' : v;
+}
+
 /** Nome ufficiale della regione ("emilia romagna" → "Emilia-Romagna"); '' se non riconosciuta. */
 export function normalizeRegion(text) {
   return REGION_BY_KEY.get(normKey(text)) || '';

@@ -6,10 +6,10 @@
 // Quando le pagine contengono valori diversi non si sceglie in silenzio: il principale è il più
 // affidabile, gli altri restano come alternative.
 
-import { emailCategory } from './parser.js';
+import { emailCategory, METHOD } from './parser.js';
 import { factsOf, isContactEligible, peopleOf } from './siteData.js';
-import { normalizePhone } from './validation.js';
-import { isProvinceCode, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
+import { normalizeEmail, normalizePhone, normKey } from './validation.js';
+import { isProvinceCode, normalizeCountry, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
 
 export const SETTORE_OPTIONS = ['Hospitality', 'Cantina / Vitivinicolo', 'Frantoio / Olivicolo', 'Altro'];
 export const TIPO_STRUTTURA_OPTIONS = [
@@ -162,7 +162,29 @@ export function proposeStructureFor(site, settore) {
 // ---------------------------------------------------------------------------------------------
 // luogo
 
-function regionOf(address) {
+// La località si completa anche con dati di altre pagine, senza servizi esterni:
+// "Via … 06063 Magione" su una pagina, "Magione - 06063 (PG) - ITALY" o "(PG)" su un'altra.
+const samePlace = (a, b) => a !== b
+  && ((a.extra.cap && a.extra.cap === b.extra.cap) || (normKey(a.extra.city) !== '' && normKey(a.extra.city) === normKey(b.extra.city)));
+const sourceOf = (fact) => ({ url: fact.best?.url || '', evidence: fact.best?.evidence || '' });
+
+/**
+ * Provincia della località scelta → { code, fact, how } | null. In ordine: l'indirizzo stesso; un altro
+ * indirizzo della stessa città o con lo stesso CAP; "Città (PR)" per la stessa città; l'unica
+ * provincia citata da sola nel sito ("(PG)", "Provincia di Perugia"). Con più province diverse: nessuna.
+ */
+function provinceOf(site, place) {
+  if (place.extra.province) return { code: place.extra.province, fact: place, how: '' };
+  const other = factsOf(site, 'address').find((a) => a.extra.province && samePlace(a, place));
+  if (other) return { code: other.extra.province, fact: other, how: "da un altro indirizzo della stessa località" };
+  const mentions = factsOf(site, 'province');
+  const only = (list, how) => (list.length && new Set(list.map((f) => f.extra.code)).size === 1 ? { code: list[0].extra.code, fact: list[0], how } : null);
+  const city = normKey(place.extra.city);
+  return only(mentions.filter((f) => city && normKey(f.extra.city) === city), `indicata accanto a ${place.extra.city}`)
+    || only(mentions.filter((f) => !f.extra.city), 'unica provincia indicata nel sito');
+}
+
+function regionOf(address, site) {
   const x = address.extra;
   const source = { method: address.best?.method || '', url: address.best?.url || '', evidence: address.best?.evidence || '' };
   if (x.regionText) {
@@ -174,18 +196,31 @@ function regionOf(address) {
     if (byName) return { value: regionFromProvince(byName), reliability: 'check', ...source, method: `dedotta dalla provincia di ${x.regionText}` };
     return { value: x.regionText, reliability: address.reliability, ...source }; // regione estera: com'è scritta
   }
-  if (x.province) return { value: regionFromProvince(x.province), reliability: 'high', ...source, method: `dedotta dalla provincia (${x.province})` };
+  const province = provinceOf(site, address);
+  if (province) {
+    const from = province.fact;
+    return {
+      value: regionFromProvince(province.code), reliability: from.kind === 'address' ? 'high' : 'check',
+      method: `dedotta dalla provincia (${province.code})${province.how ? `, ${province.how}` : ''}`,
+      url: from.best?.url || source.url, evidence: from.best?.evidence || source.evidence,
+    };
+  }
   const capital = provinceFromName(x.city);
   if (capital) return { value: regionFromProvince(capital), reliability: 'check', ...source, method: 'dedotta dalla città (capoluogo di provincia)' };
   return null;
 }
 
-function countryOf(address, region) {
+function countryOf(address, region, site) {
   const x = address.extra;
-  const source = { url: address.best?.url || '', evidence: address.best?.evidence || '' };
-  if (x.country) return { value: x.country, reliability: address.reliability, method: address.best?.method || '', ...source };
-  if (x.province) return { value: 'Italia', reliability: 'high', method: `dedotto dalla provincia (${x.province})`, ...source };
+  const source = sourceOf(address);
+  if (x.country) return { value: normalizeCountry(x.country), reliability: address.reliability, method: address.best?.method || '', ...source };
+  const other = factsOf(site, 'address').find((a) => a.extra.country && samePlace(a, address));
+  if (other) return { value: normalizeCountry(other.extra.country), reliability: other.reliability, method: "da un altro indirizzo della stessa località", ...sourceOf(other) };
+  const province = provinceOf(site, address);
+  if (province) return { value: 'Italia', reliability: province.fact.kind === 'address' ? 'high' : 'check', method: `dedotto dalla provincia (${province.code})`, ...sourceOf(province.fact) };
   if (region && normalizeRegion(region.value)) return { value: 'Italia', reliability: 'check', method: 'dedotto dalla regione', ...source };
+  const mention = factsOf(site, 'country')[0]; // "ITALY" scritto da solo, per esempio nel footer
+  if (mention) return { value: normalizeCountry(mention.value), reliability: 'check', method: 'indicato nel sito', ...sourceOf(mention) };
   return null;
 }
 
@@ -222,8 +257,8 @@ export function proposeCompany(site, { fixed = {} } = {}) {
 
   const addresses = addressesOf(site);
   const place = addresses[0];
-  const region = place ? regionOf(place) : null;
-  const country = place ? countryOf(place, region) : null;
+  const region = place ? regionOf(place, site) : null;
+  const country = place ? countryOf(place, region, site) : null;
   const linkedin = factsOf(site, 'social').filter((f) => f.extra.network === 'LinkedIn');
   const sector = proposeSector(site.signals);
 
@@ -294,6 +329,64 @@ export function proposeContact(site, chosenKey = null) {
 // sistemi esterni utili al commerciale, in quest'ordine (CMS e strumenti privacy no)
 const COMMERCIAL_SYSTEMS = ['Booking engine', 'Portale', 'Prenotazione ristorante', 'E-commerce'];
 
+// ---------------------------------------------------------------------------------------------
+// Segnali commerciali: osservazioni verificabili sul sito, mai deduzioni sul ruolo di una persona.
+// «Ruolo decisionale» e «Ruolo commerciale» compaiono solo se il ruolo è scritto così nel sito.
+
+const DECISION_ROLE = /\b(titolar[ei]|co-?titolare|contitolare|proprietari[oa]|owner|founder|co-?founder|fondat(?:ore|rice)|ceo|direttor[ei]|direttrice|general\s+manager|managing\s+director|amministrat(?:ore|rice))\b/i;
+const COMMERCIAL_ROLE = /\b(export|vendit[ae]|sales|commercial[ei]|booking|prenotazion[ei]|reservations?)\b/i;
+const NOT_A_BUSINESS_ROLE = /trattamento|protezione\s+dei\s+dati|privacy/i; // "Titolare del trattamento" non è il titolare dell'azienda
+
+// peso interno, solo per ordinare le persone: non si mostra e non diventa una probabilità
+const SIGNAL_WEIGHT = { decisionRole: 100, commercialRole: 60, companyPhone: 40, companyEmail: 30, whatsapp: 20, companyEmail2: 0, multiPage: 10 };
+
+/**
+ * Segnali di una persona rispetto ai dati dell'azienda (company: valori del form Azienda).
+ * → [{ type, label, short }] nell'ordine d'importanza; short = forma breve per il Contesto rapido.
+ */
+export function commercialSignals(person, company = {}, site = null) {
+  const signals = [];
+  const role = String(person.role || '');
+  if (role && !NOT_A_BUSINESS_ROLE.test(role)) {
+    if (DECISION_ROLE.test(role)) signals.push({ type: 'decisionRole', label: `Ruolo decisionale esplicito: ${role}`, short: 'Ruolo decisionale esplicito' });
+    if (COMMERCIAL_ROLE.test(role)) signals.push({ type: 'commercialRole', label: `Ruolo commerciale esplicito: ${role}`, short: 'Ruolo commerciale esplicito' });
+  }
+  const numbers = new Set([person.phone, person.mobile, person.whatsapp].map((n) => normalizePhone(n || '')).filter(Boolean));
+  const companyPhone = normalizePhone(company.phone || '');
+  if (companyPhone && numbers.has(companyPhone)) {
+    signals.push({ type: 'companyPhone', label: "Numero coincidente con il telefono principale dell'azienda", short: "Numero coincidente con il telefono principale dell'azienda" });
+  }
+  const whatsapp = site ? factsOf(site, 'whatsapp').map((f) => normalizePhone(f.value)) : [];
+  if (whatsapp.some((n) => numbers.has(n))) signals.push({ type: 'whatsapp', label: 'Numero coincidente con il WhatsApp aziendale', short: 'Numero coincidente con il WhatsApp aziendale' });
+  const email = normalizeEmail(person.email || '');
+  if (email && email === normalizeEmail(company.email_aziendale_principale || '')) {
+    signals.push({ type: 'companyEmail', label: "Email coincidente con l'email principale dell'azienda", short: "Email coincidente con l'email principale dell'azienda" });
+  }
+  if (email && email === normalizeEmail(company.email_aziendale_secondaria || '')) {
+    signals.push({ type: 'companyEmail2', label: "Email coincidente con l'email secondaria dell'azienda", short: "Email coincidente con l'email secondaria dell'azienda" });
+  }
+  // pagine indipendenti: il footer ripetuto su ogni pagina non conta
+  const pages = new Set((person.sources || []).filter((s) => s.method !== METHOD.footer && s.method !== METHOD.header).map((s) => s.url));
+  if (pages.size >= 2) signals.push({ type: 'multiPage', label: 'Persona citata in più sezioni del sito', short: 'Persona citata in più sezioni del sito' });
+  return signals;
+}
+
+/**
+ * Persone in ordine di rilevanza commerciale, ciascuna con i suoi commercialSignals. Cambia solo
+ * l'ordine (e il «Contatto suggerito»): i dati delle persone e il Contatto scelto restano quelli.
+ */
+export function rankPeople(site, company = {}) {
+  const ranked = peopleOf(site).map((p, i) => {
+    const signals = commercialSignals(p, company, site);
+    const weight = signals.reduce((n, s) => n + SIGNAL_WEIGHT[s.type], 0);
+    return { person: { ...p, commercialSignals: signals }, weight, i };
+  });
+  return ranked.sort((a, b) => b.weight - a.weight || a.i - b.i).map((r) => r.person);
+}
+
+/** La prima persona utilizzabile come Contatto, nell'ordine di rilevanza: solo un suggerimento. */
+export const suggestedContact = (ranked) => ranked.find((p) => p.eligible)?.key || null;
+
 /** "Paolo — Host (cognome non trovato)", "Mario Rossi — Proprietario" */
 export const personLine = (p) => `${[p.firstName, p.lastName].filter(Boolean).join(' ')}${p.role ? ` — ${p.role}` : ''}${p.lastName ? '' : ' (cognome non trovato)'}`;
 
@@ -322,7 +415,10 @@ export function buildQuickContext(site, company = {}, contact = {}) {
   section('ULTERIORI TELEFONI', factsOf(site, 'phone')
     .filter((f) => !usedPhones.has(f.key) && !whatsappKeys.has(f.key))
     .map((f) => f.value));
-  section('POTENZIALI CONTATTI', peopleOf(site).map(personLine));
+  // persone per rilevanza, con i segnali che contano (in breve; niente punteggi né deduzioni)
+  section('POTENZIALI CONTATTI', rankPeople(site, company).map((p) => [
+    personLine(p), ...p.commercialSignals.filter((s) => s.type !== 'multiPage').map((s) => `  ${s.short}`),
+  ].join('\n')));
   section('ALTRI CANALI', [
     ...factsOf(site, 'social').filter((f) => f.value !== company.linkedin_company_page).map((f) => `${f.extra.network}: ${f.value}`),
     ...factsOf(site, 'fax').map((f) => `Fax: ${f.value}`),

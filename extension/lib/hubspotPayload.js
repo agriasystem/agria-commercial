@@ -34,13 +34,33 @@ function cleanValue(prop, raw) {
 function build(props, record, skip) {
   const properties = {};
   const errors = [];
+  const invalid = [];
   for (const prop of props) {
     if (skip(prop) || !isPropVisible(prop, record)) continue;
     const { value, error } = cleanValue(prop, record?.[prop.name]);
-    if (error) errors.push(`${prop.label}: ${error}.`);
-    else if (value) properties[prop.name] = value;
+    if (error) {
+      errors.push(`${prop.label}: ${error}.`);
+      invalid.push(prop.name);
+    } else if (value) properties[prop.name] = value;
   }
-  return { properties, errors };
+  return { properties, errors, invalid };
+}
+
+export const PREFLIGHT_MESSAGE = 'Alcuni dati rilevati non sono stati trasferiti correttamente al modello HubSpot.';
+
+/**
+ * Pre-flight: proprietà dell'Azienda compilate (e visibili) che il payload non contiene, come etichette.
+ * Un valore non valido ha già il suo errore; un campo nascosto (tipo struttura fuori dall'Hospitality)
+ * è escluso per regola. Il proprietario deve essere il commerciale, il Lead Status NEW.
+ */
+export function lostFields(record, properties, { invalid = [], ownerId = '' } = {}) {
+  const lost = COMPANY_PROPS
+    .filter((p) => p.input !== 'owner' && p.input !== 'fixed' && isPropVisible(p, record || {}) && !invalid.includes(p.name))
+    .filter((p) => text(record?.[p.name]).trim() && !properties[p.name])
+    .map((p) => p.label);
+  if (ownerId && properties.hubspot_owner_id !== ownerId) lost.push(propertyLabel('hubspot_owner_id'));
+  if (properties.hs_lead_status !== LEAD_STATUS.value) lost.push(propertyLabel('hs_lead_status'));
+  return lost;
 }
 
 /**
@@ -49,12 +69,12 @@ function build(props, record, skip) {
  */
 export function companyPayload(record, operator) {
   const { hubspotOwnerId } = requireOperator(operator);
-  const { properties, errors } = build(COMPANY_PROPS, record || {}, (p) => p.input === 'owner' || p.input === 'fixed');
+  const { properties, errors, invalid } = build(COMPANY_PROPS, record || {}, (p) => p.input === 'owner' || p.input === 'fixed');
   if (!properties.name) errors.push('Nome azienda mancante.');
   if (!properties.domain) errors.push('Dominio mancante.');
   properties.hubspot_owner_id = hubspotOwnerId;
   properties.hs_lead_status = LEAD_STATUS.value;
-  return { properties, errors };
+  return { properties, errors, invalid };
 }
 
 /**

@@ -7,7 +7,7 @@
 
 import { el } from './render.js';
 import {
-  clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, updateHubspot,
+  clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, preflightCompany, updateHubspot,
 } from '../lib/draft.js';
 import { leadStatusLabel } from '../lib/crmModel.js';
 import { MOCK_SCENARIOS } from '../lib/config.js';
@@ -193,6 +193,8 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
       return;
     }
     const { properties, errors } = companyPayload(crmRecords(getDraft(), getOperator()).company, getOperator());
+    // pre-flight: un dato rilevato che non arriverebbe a HubSpot blocca la scrittura
+    const preflight = preflightCompany(getDraft(), getOperator());
     const children = [el('h3', { class: 'step-title' }, 'Crea Azienda in HubSpot')];
     if (v.outcome === 'possible') {
       const ack = el('input', { type: 'checkbox', id: 'ack-duplicate' });
@@ -205,8 +207,12 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
     }
     children.push(el('p', { class: 'hint' }, 'Verranno scritti questi dati (solo i campi compilati):'), preview(properties));
     if (errors.length) children.push(el('div', { class: 'result', 'data-kind': 'warn' }, el('strong', {}, 'Da correggere prima della creazione'), ...errors.map((e) => el('p', {}, e))));
+    if (!preflight.ok) {
+      children.push(el('div', { id: 'preflight-error', class: 'result', 'data-kind': 'error' },
+        el('strong', {}, preflight.message), el('p', {}, `Campi: ${preflight.missing.join(', ')}.`)));
+    }
     if (st.companyError) children.push(el('div', { class: 'result', 'data-kind': 'error' }, el('strong', {}, 'Azienda non creata'), ...lines(st.companyError)));
-    const blocked = Boolean(busy) || !status.ready || errors.length > 0 || (v.outcome === 'possible' && !st.acknowledged);
+    const blocked = Boolean(busy) || !status.ready || errors.length > 0 || !preflight.ok || (v.outcome === 'possible' && !st.acknowledged);
     children.push(el('button', { id: 'create-company', class: 'btn primary wide', type: 'button', disabled: blocked, onclick: onCreateCompany },
       busy === 'company' ? 'Creazione in corso…' : 'Crea Azienda in HubSpot'));
     box.replaceChildren(...children);

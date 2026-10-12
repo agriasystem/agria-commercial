@@ -16,7 +16,7 @@ import {
   cleanText, domainFromUrl, formatPhone, normalizeEmail, normalizeLinkedin, normalizePhone,
   normalizeUrl, normKey, sameSite, snippet,
 } from './validation.js';
-import { isProvinceCode } from './italy.js';
+import { isProvinceCode, normalizeCountry, provinceFromName } from './italy.js';
 import { FIRST_NAMES } from './names.js';
 import { collectCompanyData, collectSignals, hasLegalSuffix, stripLegalSuffix } from './companyData.js';
 
@@ -551,6 +551,11 @@ const STREET_RE = /(?:^|[^\p{L}])(via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|p
 const CAP_CITY_PROVINCE = /^(\d{5})[ \t]*[-–,]?[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+[\p{L}'’.-]+){0,5}?)[ \t]*(?:\([ \t]*(\p{Lu}{2})[ \t]*\)|[-–,][ \t]*(\p{Lu}{2})(?!\p{L})|[ \t]+(\p{Lu}{2})(?!\p{L}))/u;
 // CAP + città senza provincia: vale solo se c'è anche la via
 const CAP_CITY = /^(\d{5})[ \t]*[-–,]?[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+(?:(?:di|del|della|dei|degli|delle|al|in|sul|sulla)[ \t]+)?\p{Lu}[\p{L}'’.-]*){0,4})/u;
+// città PRIMA del CAP, provincia subito dopo: "…, Magione - 06063 (PG) - ITALY"
+const CAP_PROVINCE = /^(\d{5})[ \t]*\([ \t]*(\p{Lu}{2})[ \t]*\)/u;
+const CITY_BEFORE = /(?:^|[,\-–])[ \t]*(\p{Lu}[\p{L}'’]+(?:[ \t]+(?:(?:di|del|della|dei|degli|delle|al|in|sul|sulla)[ \t]+)?\p{Lu}[\p{L}'’]+){0,3})[ \t]*[-–,]?[ \t]*$/u;
+// paese scritto dopo la città o la provincia: "(PG) - ITALY", "Assisi (PG), Italia"
+const COUNTRY_AFTER = /^[ \t]*[-–,·|]?[ \t]*(italia|italy)(?!\p{L})/iu;
 const CITY_TAIL = /^(tel|telefono|fax|email|e-mail|mail|cell|italia|italy|it|p|partita|piva|c|cf|codice|whatsapp|orari)$/i;
 const LEGAL_SEAT = /sede\s+legale|registered\s+office/i;
 
@@ -569,34 +574,59 @@ function cityWithoutTail(city) {
   return words.join(' ');
 }
 
+// la via dal PRIMO indicatore (via, località, frazione…) del tratto prima della città:
+// "Via del Moscatello, 3 - Frazione Montesperello" resta intera
+function streetFrom(text) {
+  const tail = text.slice(-140);
+  const first = tail.matchAll(STREET_RE).next().value;
+  if (!first) return '';
+  const street = trimSeparators(tail.slice(first.index + first[0].length - first[1].length));
+  return street.length >= 5 && street.length <= 120 && !/[@:]|https?/i.test(street) ? street : '';
+}
+
 function addressesInText(text, baseScore, method, out) {
   if (!text) return;
   const lines = text.split(/\n+/).map((l) => l.replace(/[ \t ]+/g, ' ').trim()).filter(Boolean);
   lines.forEach((line, i) => {
     for (const m of line.matchAll(/(?<!\d)\d{5}(?!\d)/g)) {
       const rest = line.slice(m.index);
+      let before = line.slice(0, m.index);
       let city;
       let province = '';
+      let afterPlace = '';
+      let cityFirst = false;
       const withProvince = rest.match(CAP_CITY_PROVINCE);
       const code = withProvince && (withProvince[3] || withProvince[4] || withProvince[5]);
+      const capProvince = rest.match(CAP_PROVINCE);
+      const cityBefore = capProvince && isProvinceCode(capProvince[2]) ? before.match(CITY_BEFORE) : null;
       if (withProvince && isProvinceCode(code)) {
         city = trimSeparators(withProvince[2]);
         province = code;
+        afterPlace = rest.slice(withProvince[0].length);
+      } else if (cityBefore && !STREET_RE.test(cityBefore[1])) {
+        city = cityBefore[1];
+        province = capProvince[2];
+        afterPlace = rest.slice(capProvince[0].length);
+        before = before.slice(0, before.length - cityBefore[0].length);
+        cityFirst = true;
       } else {
         const plain = rest.match(CAP_CITY);
         if (!plain) continue;
         city = cityWithoutTail(trimSeparators(plain[2]));
+        afterPlace = rest.slice(plain[0].length);
       }
+      STREET_RE.lastIndex = 0;
+      city = city.replace(/[.,;:]+$/, '');
       if (!city) continue;
-      const before = line.slice(0, m.index);
       const fromPreviousLine = i > 0 && !trimSeparators(before);
-      const street = streetBefore(before) || (fromPreviousLine ? streetBefore(lines[i - 1]) : '');
+      const street = (cityFirst ? streetFrom(before) : streetBefore(before)) || (fromPreviousLine ? streetBefore(lines[i - 1]) : '');
       if (!province && !street) continue;
       city = smartCase(city);
+      const country = COUNTRY_AFTER.test(afterPlace) ? 'Italia' : '';
       const address = [street, `${m[0]} ${city}${province ? ` (${province})` : ''}`].filter(Boolean).join(', ');
       const context = `${fromPreviousLine ? lines[i - 1] : ''} ${before}`.slice(-160);
       out.push({
-        address, street, cap: m[0], city, province, regionText: '', country: '',
+        address, street, cap: m[0], city, province, regionText: '', country,
         score: baseScore + (street ? 1 : 0) + (province ? 1 : 0),
         method, high: Boolean(street && province), legalSeat: LEGAL_SEAT.test(context),
         evidence: cleanText(`${fromPreviousLine ? `${lines[i - 1]} · ` : ''}${line}`, 240),
@@ -605,9 +635,38 @@ function addressesInText(text, baseScore, method, out) {
   });
 }
 
-function countryOf(value) {
-  const v = cleanText(value, 60);
-  return /^(it|ita|italy|italia)$/i.test(v) ? 'Italia' : v;
+const countryOf = (value) => normalizeCountry(cleanText(value, 60));
+
+// Province e paese citati fuori da un indirizzo completo, anche su pagine diverse:
+// "(PG)" da solo su una riga, "Magione (PG)", "Provincia di Perugia", "ITALY" da solo.
+// Servono a completare la località dell'indirizzo principale (vedi crmModel.placeOf).
+const PROVINCE_ALONE = /^\([ \t]*(\p{Lu}{2})[ \t]*\)$/u;
+const CITY_PROVINCE = /(?<![\p{L}\d])(\p{Lu}[\p{L}'’]+(?:[ \t]+(?:(?:di|del|della|dei|sul|sulla|al|in)[ \t]+)?\p{Lu}[\p{L}'’]+){0,3})[ \t]*\([ \t]*(\p{Lu}{2})[ \t]*\)/gu;
+const PROVINCE_NAMED = /provincia[ \t]+di[ \t]+(\p{Lu}[\p{L}'’]+(?:[ \t]+\p{Lu}[\p{L}'’]+)?)/giu;
+const COUNTRY_ALONE = /^(?:[-–·|][ \t]*)?(italia|italy)\.?$/iu;
+
+function geoMentions(text, method, add) {
+  if (!text) return;
+  const lines = text.split(/\n+/).map((l) => l.replace(/[ \t ]+/g, ' ').trim()).filter(Boolean);
+  for (const line of lines) {
+    const province = (code, city, evidence) => {
+      if (!isProvinceCode(code)) return;
+      add('province', code, { method, score: 1, key: `${code}:${normKey(city)}`, evidence, extra: { code, city } });
+    };
+    const alone = line.match(PROVINCE_ALONE);
+    if (alone) province(alone[1], '', line);
+    for (const m of line.matchAll(CITY_PROVINCE)) {
+      const city = smartCase(m[1]);
+      if (!STREET_RE.test(city) && !CITY_TAIL.test(city)) province(m[2], city, snippet(line, m.index, m[0].length, 40));
+      STREET_RE.lastIndex = 0;
+    }
+    for (const m of line.matchAll(PROVINCE_NAMED)) {
+      const words = m[1].split(' ');
+      const code = provinceFromName(m[1]) || provinceFromName(words[0]);
+      if (code) province(code, '', snippet(line, m.index, m[0].length, 40));
+    }
+    if (COUNTRY_ALONE.test(line)) add('country', 'Italia', { method, score: 1, evidence: line });
+  }
 }
 
 function composeAddress(parts, score, method, evidence) {
@@ -662,6 +721,7 @@ function collectAddresses(ctx, add) {
     const { address, score, method, high, evidence, ...parts } = c;
     add('address', address, { method, score, high, evidence, extra: parts });
   }
+  for (const [zone, method] of Object.entries(TEXT_METHOD)) geoMentions(ctx.text[zone === 'page' ? 'main' : zone], method, add);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -700,11 +760,40 @@ const NAME_WORD = String.raw`(?:\p{Lu}['’]\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+(?:-\p{Lu
 // da 1 a 4 parole: il solo nome di battesimo vale solo se è un nome noto (vedi nameTokens)
 const NAME = String.raw`${NAME_WORD}(?:[ \t]+${NAME_WORD}){0,3}`;
 // "Titolare: Mario Rossi" / "Titolare\nMario Rossi" / "Host: Paolo" / "Il vostro host Paolo" / "Il vostro host è Paolo"
-const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*(?:[:\-–—,]|(?:è|e['’])(?!\p{L}))?[ \t]*(?:\n[ \t]*){0,2}(${NAME})(?!\p{L})`, 'gu');
+// titolo prima del nome: "Titolare: Dott. Roberto Berioli", "Ing. Anna Neri"
+const HONORIFIC = String.raw`(?:(?:Dott(?:\.?ssa)?|Dr|Ing|Avv|Arch|Geom|Rag|Prof(?:\.?ssa)?|Sig(?:\.?r?a|\.?na)?|Mr|Mrs|Ms)\.?[ \t]+)?`;
+const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*(?:[:\-–—,]|(?:è|e['’])(?!\p{L}))?[ \t]*(?:\n[ \t]*){0,2}${HONORIFIC}(${NAME})(?!\p{L})`, 'gu');
 // "Mario Rossi – Titolare" / "Mario Rossi (titolare)" / "Mario Rossi\nTitolare" / "Paolo – Host" /
 // "Paolo, host di …" / "Paolo, il vostro host"
 const ROLE_ARTICLE = String.raw`(?:(?:[Ii]l|[Ll][ao])[ \t]+|[Ll]['’][ \t]*)?(?:(?:vostr[oaie]|nostr[oaie]|tu[oa])[ \t]+)?`;
 const NAME_THEN_ROLE = new RegExp(String.raw`(?<!\p{L})(${NAME})[ \t]*(?:[,\-–—|:(/][ \t]*|(?:\n[ \t]*){1,2})${ROLE_ARTICLE}(${ROLE})(?!\p{L})`, 'gu');
+
+// Ruoli scritti dal sito con parole proprie, fuori dall'elenco ROLES. Valgono solo in una scheda di
+// contatto: il recapito (telefono o email) subito dopo il nome, e un nome di battesimo noto.
+//   "Export, vendite, acquisti, logistica: Giulio Brandelli +39 349 5241724"
+//   "Prenotazioni - Anna Neri 333 1234567" · "Anna Neri — Ufficio export — +39 …"
+//   "Ufficio export\nAnna Neri\n+39 …"
+const FREE_LABEL = String.raw`\p{L}[\p{L}'’ ,/&.()]{1,58}?`;
+const PHONE_AHEAD = String.raw`(?:(?:tel|telefono|cell|cellulare|mob|mobile|whatsapp)\.?[ \t]*:?[ \t]*)?\+?\d[\d \t./-]{6,}\d`;
+const CONTACT_AHEAD = String.raw`(?=[ \t]*(?:[,;·|][ \t]*)?(?:${PHONE_AHEAD}|(?:e-?mail[ \t]*:?[ \t]*)?[\w.+-]+@[\w-]+\.))`;
+const LABEL_THEN_CONTACT = new RegExp(String.raw`(?:^|\n)[ \t]*(${FREE_LABEL})[ \t]*(?::|[ \t][-–—][ \t])[ \t]*${HONORIFIC}(${NAME})${CONTACT_AHEAD}`, 'gu');
+const NAME_LABEL_CONTACT = new RegExp(String.raw`(?:^|\n)[ \t]*${HONORIFIC}(${NAME})[ \t]+[-–—|][ \t]*(${FREE_LABEL})[ \t]*[-–—|:][ \t]*(?=${PHONE_AHEAD}|[\w.+-]+@[\w-]+\.)`, 'gu');
+const HEADING_THEN_CONTACT = new RegExp(String.raw`(?:^|\n)[ \t]*(${FREE_LABEL})[ \t]*:?[ \t]*\n[ \t]*${HONORIFIC}(${NAME})(?=[ \t]*(?:[,;·|][ \t]*)?${PHONE_AHEAD}|[ \t]*\n[ \t]*${PHONE_AHEAD})`, 'gu');
+// etichette di un recapito o di una sezione, mai un ruolo
+const FIELD_LABELS = new Set([
+  'indirizzo', 'telefono', 'tel', 'cellulare', 'cell', 'mobile', 'mob', 'email', 'mail', 'fax', 'pec', 'whatsapp',
+  'sede', 'operativa', 'orari', 'orario', 'apertura', 'partita', 'iva', 'piva', 'codice', 'fiscale', 'cap', 'via', 'viale',
+  'piazza', 'localita', 'frazione', 'strada', 'contatti', 'contattaci', 'contatto', 'info', 'informazioni', 'scrivici',
+  'chiamaci', 'seguici', 'newsletter', 'home', 'menu', 'copyright', 'privacy', 'cookie', 'cookies', 'policy', 'dove', 'siamo',
+]);
+
+/** Un'etichetta libera usata come ruolo, oppure '' se è un campo ("Indirizzo", "Tel.") o testo qualsiasi. */
+function freeRole(label) {
+  const role = cleanText(label, 80).replace(/[\s,.;:/&]+$/, '');
+  const words = role.split(/[^\p{L}'’]+/u).filter(Boolean);
+  if (role.length < 3 || words.length > 8 || words.some((w) => FIELD_LABELS.has(normKey(w)) || isLegalWord(w))) return '';
+  return words.some((w) => normKey(w).length >= 3) ? role : '';
+}
 
 // parole che compaiono vicino ai ruoli ma non sono nomi di persona
 const NOT_NAME = new Set([
@@ -715,6 +804,7 @@ const NOT_NAME = new Set([
   'camere', 'appartamenti', 'srl', 'srls', 'spa', 'snc', 'sas', 'societa', 'soc', 'coop', 'cooperativa', 'gruppo',
   'studio', 'agenzia', 'consorzio', 'il', 'i', 'gli', 'un', 'una', 'uno', 'nostro', 'nostra', 'nostri', 'nostre',
   'vostro', 'vostra', 'vostri', 'vostre', 'tuo', 'tua', 'sono', 'ecco', 'io', 'mi', 'vi', 'ti',
+  'dott', 'dottssa', 'dr', 'avv', 'arch', 'geom', 'rag', 'prof', 'profssa', 'sig', 'sigra', 'signa',
   'team', 'staff', 'the', 'our', 'and', 'servizi', 'prodotti', 'vini', 'vino', 'olio', 'eventi', 'degustazioni',
   'offerte', 'galleria', 'gallery', 'foto', 'video', 'storia', 'territorio', 'vigneti', 'enoteca', 'ospitalita',
   'privacy', 'cookie', 'policy', 'termini', 'condizioni', 'informativa', 'accetta', 'rifiuta', 'personalizza',
@@ -921,7 +1011,7 @@ function contactsNear(text, who) {
 
 // In un elenco "Nome – Ruolo / Nome – Ruolo" lo stesso ruolo può agganciarsi sia al nome prima
 // sia a quello dopo: ogni ruolo e ogni nome si usano una volta sola, in ordine di lettura.
-function peopleFromText(text, out) {
+function peopleFromText(text, out, method = METHOD.page, orderBase = 1000) {
   if (!text) return;
   const pairs = [];
   for (const m of text.matchAll(ROLE_THEN_NAME)) {
@@ -943,6 +1033,23 @@ function peopleFromText(text, out) {
     usedNames.add(p.nameAt);
     accepted.push({ ...p, words });
   }
+  // poi le etichette libere, solo per i nomi non già presi da un ruolo dell'elenco
+  const free = [];
+  const nameAtOf = (m, raw) => m.index + m[0].lastIndexOf(raw);
+  for (const m of text.matchAll(LABEL_THEN_CONTACT)) free.push({ rawName: m[2], rawRole: m[1], start: m.index, end: m.index + m[0].length, nameAt: nameAtOf(m, m[2]) });
+  for (const m of text.matchAll(NAME_LABEL_CONTACT)) free.push({ rawName: m[1], rawRole: m[2], start: m.index, end: m.index + m[0].length, nameAt: nameAtOf(m, m[1]) });
+  for (const m of text.matchAll(HEADING_THEN_CONTACT)) free.push({ rawName: m[2], rawRole: m[1], start: m.index, end: m.index + m[0].length, nameAt: nameAtOf(m, m[2]) });
+  for (const p of free.sort((a, b) => a.start - b.start)) {
+    if (usedNames.has(p.nameAt)) continue;
+    const role = freeRole(p.rawRole);
+    const words = role ? nameTokens(p.rawName, 'start') : null;
+    if (!words || words.length < 2 || !FIRST_NAMES.has(normKey(words[0]))) continue;
+    usedNames.add(p.nameAt);
+    // la persona va dal nome in poi: i recapiti si cercano subito dopo il nome
+    const nameEnd = p.nameAt + p.rawName.length;
+    accepted.push({ ...p, rawRole: role, words, start: p.nameAt, end: Math.max(nameEnd, p.end), roleAt: -1 - p.nameAt });
+  }
+  accepted.sort((a, b) => a.start - b.start);
   accepted.forEach((p, i) => {
     // i recapiti fino alla persona successiva, al massimo tre righe
     const limit = Math.min(accepted[i + 1]?.start ?? text.length, p.end + 220);
@@ -953,9 +1060,9 @@ function peopleFromText(text, out) {
       ...near,
       role: displayRole(p.rawRole),
       priority: rolePriority(p.rawRole),
-      method: METHOD.page,
+      method,
       evidence: snippet(text, p.start, p.end - p.start, 30),
-      order: 1000 + p.start,
+      order: orderBase + p.start,
     }));
   });
 }
@@ -1015,7 +1122,9 @@ function findPeople(ctx, facts) {
   peopleFromLinks(ctx.links, found);
   // contenuto e footer separati: i recapiti dell'azienda nel footer non finiscono sull'ultima persona della pagina
   peopleFromText(ctx.text.main, found);
-  if (ctx.text.main !== ctx.text.page) peopleFromText(ctx.text.footer, found);
+  // le persone del footer restano tali: lo stesso footer su ogni pagina non è «citata in più sezioni»
+  // e se la stessa persona è anche nel contenuto, vale la menzione del contenuto (ordine più basso)
+  if (ctx.text.main !== ctx.text.page) peopleFromText(ctx.text.footer, found, METHOD.footer, 100000);
   const people = mergePeople(found);
 
   const personalEmails = unique(facts.filter((f) => f.kind === 'email' && ownEmail(f.value) && !f.extra.gluedPrefixes && !f.extra.pec).map((f) => f.value));

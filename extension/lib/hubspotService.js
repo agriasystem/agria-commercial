@@ -13,7 +13,7 @@
 import { loadConfig } from './config.js';
 import { createHubspotClient, HubspotError, validateCompanyQuery } from './hubspotClient.js';
 import { companyKeys, contactKeys } from './hubspotDuplicates.js';
-import { companyPayload, contactPayload } from './hubspotPayload.js';
+import { companyPayload, contactPayload, lostFields, PREFLIGHT_MESSAGE } from './hubspotPayload.js';
 import { createMockHubspotClient } from './mockHubspotClient.js';
 import { loadActiveOperator, operatorById, OperatorRequiredError } from './operators.js';
 import { COMPANY_PROPS, CONTACT_PROPS, LEAD_STATUS } from './crmModel.js';
@@ -216,8 +216,11 @@ export function createHubspotService({
     async createCompany({ company, acknowledged }) {
       const operator = await operatorOrFail();
       const values = record(company, COMPANY_FIELD_NAMES);
-      const { properties, errors } = companyPayload(values, operator);
+      const { properties, errors, invalid } = companyPayload(values, operator);
       if (errors.length) throw new HubspotError('invalid_input', `Dati da correggere prima della creazione:\n- ${errors.join('\n- ')}`);
+      // pre-flight anche qui: nessun dato ricevuto dal pannello deve sparire nel payload
+      const lost = lostFields(values, properties, { invalid, ownerId: operator.hubspotOwnerId });
+      if (lost.length) throw new HubspotError('invalid_input', `${PREFLIGHT_MESSAGE}\n- ${lost.join('\n- ')}`);
       const { api, mock } = await client();
       const mode = mock ? 'mock' : 'real';
       const domain = properties.domain;

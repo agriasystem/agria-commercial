@@ -1,6 +1,6 @@
 {
   "name": "agria-scout",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Agria Scout: estensione Chrome per il prospecting Agria System.",
   "type": "module",
