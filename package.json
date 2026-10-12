@@ -1,0 +1,16 @@
+{
+  "name": "agria-scout",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agria Scout: estensione Chrome per il prospecting Agria System (V0).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "e2e": "node tools/e2e.js",
+    "check": "npm test && npm run e2e",
+    "icons": "node tools/make-icons.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

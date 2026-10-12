@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impostazioni · Agria Scout</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="../ui/agria.css">
+<script type="module" src="options.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
+  <span class="badge mock">HubSpot MOCK</span>
+</header>
+
+<main class="wrap narrow">
+  <h2 class="page-title">Impostazioni</h2>
+  <form id="settings" class="stack" novalidate>
+    <section class="card" aria-labelledby="mode-title">
+      <h3 id="mode-title" class="eyebrow">Connessione HubSpot</h3>
+      <fieldset class="choices">
+        <legend class="sr">Modalità HubSpot</legend>
+        <label class="choice"><input type="radio" name="mode" value="mock" checked><span><strong>MOCK · simulazione</strong><small>«Verifica HubSpot» risponde con dati simulati. Nessun dato viene letto o scritto su HubSpot.</small></span></label>
+        <label class="choice off"><input type="radio" name="mode" value="real" disabled><span><strong>HubSpot reale</strong><small>Non disponibile in questa versione (V0).</small></span></label>
+      </fieldset>
+    </section>
+
+    <section class="card" aria-labelledby="scenario-title">
+      <h3 id="scenario-title" class="eyebrow">Scenario simulato</h3>
+      <p class="hint">Cosa risponde «Verifica HubSpot» finché la modalità è MOCK.</p>
+      <fieldset class="choices">
+        <legend class="sr">Scenario MOCK</legend>
+        <label class="choice"><input type="radio" name="mockScenario" value="not_found"><span><strong>Azienda non presente</strong><small>Il dominio non risulta in HubSpot: l'azienda si potrà creare.</small></span></label>
+        <label class="choice"><input type="radio" name="mockScenario" value="found"><span><strong>Azienda già presente</strong><small>Restituisce un'azienda simulata con lo stesso dominio.</small></span></label>
+        <label class="choice"><input type="radio" name="mockScenario" value="error"><span><strong>Errore HubSpot</strong><small>Simula un errore di connessione, per provare i messaggi.</small></span></label>
+      </fieldset>
+      <p id="saved" class="saved" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card" aria-labelledby="privacy-title">
+      <h3 id="privacy-title" class="eyebrow">Dati e privacy</h3>
+      <ul class="plain">
+        <li>Agria Scout legge una pagina solo quando premi «Analizza pagina», e non la modifica.</li>
+        <li>I dati trovati restano in questo browser: nessun server, nessun servizio a pagamento.</li>
+        <li>In questa versione non c'è alcuna connessione a HubSpot e non serve nessuna credenziale.</li>
+      </ul>
+    </section>
+  </form>
+</main>
+</body>
+</html>

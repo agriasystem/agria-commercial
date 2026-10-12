@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agria Scout</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="../ui/agria.css">
+<script type="module" src="sidepanel.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
+  <span class="badge mock" title="HubSpot è simulato: nessun dato viene letto o scritto su HubSpot">HubSpot MOCK</span>
+  <button id="open-settings" class="tbtn" type="button">Impostazioni</button>
+</header>
+
+<main class="wrap">
+  <section id="status" class="card status" data-state="idle" aria-labelledby="status-title">
+    <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
+    <div aria-live="polite">
+      <p id="status-text" class="status-text">Caricamento…</p>
+      <p id="status-page" class="status-page" hidden></p>
+      <ul id="status-notes" class="notes" hidden></ul>
+    </div>
+    <div class="actions">
+      <button id="analyze" class="btn primary" type="button">Analizza pagina</button>
+      <button id="clear" class="btn ghost" type="button">Svuota</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="company-title">
+    <h2 id="company-title" class="eyebrow">Azienda</h2>
+    <div id="company-fields" class="fields"></div>
+  </section>
+
+  <section class="card" aria-labelledby="contact-title">
+    <h2 id="contact-title" class="eyebrow">Contatto</h2>
+    <div id="contact-fields" class="fields"></div>
+    <div id="people" class="people" hidden>
+      <h3 class="label">Altre persone trovate</h3>
+      <div id="people-list" class="people-list"></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="hubspot-title">
+    <h2 id="hubspot-title" class="eyebrow">HubSpot <span class="badge mock">MOCK</span></h2>
+    <p class="hint">Simulazione: nessun dato viene letto o scritto su HubSpot. Scenario attivo: <strong id="mock-scenario">…</strong></p>
+    <button id="verify" class="btn wide" type="button">Verifica HubSpot</button>
+    <div id="verify-result" class="result" role="status" hidden></div>
+  </section>
+
+  <p class="foot">Agria Scout <span id="version"></span> · I dati restano in questo browser</p>
+</main>
+</body>
+</html>
