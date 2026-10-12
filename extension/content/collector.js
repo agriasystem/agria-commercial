@@ -1,4 +1,4 @@
-// Content script di Agria Scout: la "fotografia" di una pagina.
+// Content script di Scout (Agria Commercial): la "fotografia" di una pagina.
 //
 // Una sola funzione, usata in due modi:
 //   - iniettata nella scheda attiva con chrome.scripting.executeScript({ func }) quando il

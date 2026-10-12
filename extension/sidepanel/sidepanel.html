@@ -3,22 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agria Scout</title>
+<title>Agria Commercial</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="../ui/agria.css">
 <script type="module" src="sidepanel.js"></script>
 </head>
 <body>
-<header class="top">
-  <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
-  <span class="badge mock" data-mode-badge title="HubSpot simulato: nessun dato viene letto o scritto su HubSpot">HubSpot MOCK</span>
-  <button id="open-settings" class="tbtn" type="button">Impostazioni</button>
+<header class="top stacked">
+  <div class="top-row">
+    <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA COMMERCIAL</h1></div>
+    <span class="badge mock" data-mode-badge title="HubSpot simulato: nessun dato viene letto o scritto su HubSpot">HubSpot MOCK</span>
+    <button id="open-settings" class="tbtn" type="button">Impostazioni</button>
+  </div>
+  <!-- moduli di Agria Commercial: Home, Scout, Outreach nel pannello; il Navigatore in una scheda ampia -->
+  <nav id="module-nav" class="module-nav" aria-label="Moduli di Agria Commercial" hidden>
+    <button id="nav-home" class="nav-item" type="button" data-view="home">Home</button>
+    <button id="nav-scout" class="nav-item" type="button" data-view="scout">Scout</button>
+    <button id="nav-outreach" class="nav-item" type="button" data-view="outreach">Outreach</button>
+    <button id="nav-navigator" class="nav-item" type="button" data-open="navigator" aria-describedby="new-tab-note">Navigatore <span aria-hidden="true">↗</span></button>
+  </nav>
+  <span id="new-tab-note" class="sr">si apre in una nuova scheda</span>
 </header>
 
 <main class="wrap">
   <!-- all'apertura, finché non c'è un commerciale attivo in questa sessione di Chrome -->
   <section id="operator-picker" class="card picker" aria-labelledby="picker-title" hidden>
-    <h2 id="picker-title" class="picker-title">Chi sta usando Agria Scout?</h2>
+    <h2 id="picker-title" class="picker-title">Chi sta usando Agria Commercial?</h2>
     <p class="hint">Scegli il tuo nome: sarai il proprietario HubSpot di Azienda e Contatto. Vale fino alla chiusura di Chrome.</p>
     <div id="operator-list" class="operator-list"></div>
     <p id="operator-error" class="picker-error" role="alert"></p>
@@ -27,13 +37,42 @@
 
   <div id="app" class="stack" hidden>
   <p id="active-user" class="who">Commerciale attivo: <strong id="active-name"></strong> · <button id="change-operator" class="linkbtn" type="button">Cambia</button></p>
-  <!-- vale solo per questa sessione di Chrome e per il commerciale attivo: serve a creare Contatti, non a verificare -->
-  <section id="session-legal" class="card session-legal" aria-labelledby="session-legal-title">
-    <h2 id="session-legal-title" class="eyebrow">Base giuridica predefinita per i nuovi prospect</h2>
-    <p id="session-legal-value" class="session-legal-value"></p>
-    <label class="confirm"><input id="session-legal-basis" type="checkbox"> Usa questa base giuridica per i nuovi contatti prospect in questa sessione</label>
-    <p class="meta">Solo per questa sessione di Chrome e per il commerciale attivo. Per il singolo contatto si cambia nel form Contatto.</p>
+
+  <!-- HOME: il prossimo passo e i tre moduli -->
+  <section id="view-home" class="view stack" aria-labelledby="home-title" hidden>
+    <h2 id="home-title" class="view-title" tabindex="-1" data-view-title>Da dove vuoi partire?</h2>
+    <div id="next-step"></div>
+    <div class="modules">
+      <article class="module-card" aria-labelledby="mod-scout-title">
+        <h3 id="mod-scout-title" class="module-name">Scout</h3>
+        <p class="module-text">Trova, analizza e registra nuovi prospect.</p>
+        <button id="home-open-scout" class="btn wide" type="button" data-view="scout">Apri Scout</button>
+      </article>
+      <article class="module-card off" aria-labelledby="mod-outreach-title">
+        <h3 id="mod-outreach-title" class="module-name">Outreach</h3>
+        <p class="module-text">Gestisci primo contatto e follow-up.</p>
+        <button id="home-outreach" class="btn wide" type="button" disabled aria-describedby="home-outreach-note">Disponibile prossimamente</button>
+        <p id="home-outreach-note" class="meta">Arriverà nella prossima fase.</p>
+      </article>
+      <article class="module-card" aria-labelledby="mod-navigator-title">
+        <h3 id="mod-navigator-title" class="module-name">Navigatore</h3>
+        <p class="module-text">Guida operativa durante le chiamate commerciali.</p>
+        <button id="home-open-navigator" class="btn wide" type="button" data-open="navigator" aria-describedby="home-navigator-note">Apri Navigatore <span aria-hidden="true">↗</span></button>
+        <p id="home-navigator-note" class="meta">Si apre in una nuova scheda.</p>
+      </article>
+    </div>
+    <!-- vale solo per questa sessione di Chrome e per il commerciale attivo: serve a creare Contatti, non a verificare -->
+    <section id="session-legal" class="card session-legal" aria-labelledby="session-legal-title">
+      <h3 id="session-legal-title" class="eyebrow">Base giuridica predefinita per i nuovi prospect</h3>
+      <p id="session-legal-value" class="session-legal-value"></p>
+      <label class="confirm"><input id="session-legal-basis" type="checkbox"> Usa questa base giuridica per i nuovi contatti prospect in questa sessione</label>
+      <p class="meta">Solo per questa sessione di Chrome e per il commerciale attivo. Per il singolo contatto si cambia nel form Contatto di Scout.</p>
+    </section>
   </section>
+
+  <!-- SCOUT: prospecting (scansione, form HubSpot, persone, verifica e creazione) -->
+  <div id="view-scout" class="view stack" hidden>
+  <h2 id="scout-title" class="view-title sr" tabindex="-1" data-view-title>Scout</h2>
   <section id="status" class="card status" data-state="idle" aria-labelledby="status-title">
     <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
     <div aria-live="polite">
@@ -84,14 +123,14 @@
   </section>
 
   <section class="card hubspot" aria-labelledby="hubspot-title">
-    <h2 id="hubspot-title" class="eyebrow">HubSpot <span class="badge mock" data-mode-badge="short">MOCK</span></h2>
+    <h2 id="hubspot-title" class="eyebrow">HubSpot</h2>
     <ol class="steps" aria-label="Passaggi">
       <li>Scansione</li><li>Verifica HubSpot</li><li>Creazione</li>
     </ol>
     <p id="hubspot-hint" class="hint"></p>
-    <p id="hubspot-blocker" class="ready" role="alert" hidden></p>
+    <div id="hubspot-blocker" role="alert" hidden></div>
     <button id="verify" class="btn wide" type="button">Verifica HubSpot</button>
-    <div id="verify-result" class="result" role="status" aria-live="polite" hidden></div>
+    <div id="verify-result" role="status" aria-live="polite" hidden></div>
     <div id="company-step" class="crm-step" aria-live="polite" hidden></div>
     <div id="contact-step" class="crm-step" aria-live="polite" hidden></div>
     <details id="audit-box" class="audit">
@@ -101,7 +140,18 @@
   </section>
   </div>
 
-  <p class="foot">Agria Scout <span id="version"></span> · I dati restano in questo browser</p>
+  <!-- OUTREACH: arriverà nella prossima fase -->
+  <section id="view-outreach" class="view" aria-labelledby="outreach-title" hidden>
+    <div class="card placeholder">
+      <h2 id="outreach-title" class="view-title" tabindex="-1" data-view-title>Outreach</h2>
+      <p id="outreach-message" class="placeholder-text"></p>
+      <p class="hint">Qui arriveranno primo contatto e follow-up. Intanto Scout e Navigatore sono pronti.</p>
+      <button id="outreach-home" class="btn" type="button" data-view="home">Torna alla Home</button>
+    </div>
+  </section>
+  </div>
+
+  <p class="foot">Agria Commercial <span id="version"></span> · I dati restano in questo browser</p>
 </main>
 </body>
 </html>

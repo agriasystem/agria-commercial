@@ -1,0 +1,13 @@
+{
+  "name": "Navigatore Chiamata Agria",
+  "sourceRepository": "navigatore-agria-sorgenti/navigatore-agria",
+  "commit": "7c02185",
+  "sourceFile": "dist/navigatore-chiamata-agria.html",
+  "sourceSha256": "8e92807db7c5b9a2913a8d61048b67aec8a2493b5d8dfc4e641487929719962b",
+  "files": {
+    "navigatore.html": "10c66c66921941626280a2f93ad0b38c5d40f917e88e9a856b5d513760594b02",
+    "navigatore-1.js": "e0cbfb34782c3068701d8922b3084afb0c46cddd70a94a63e054e6febfa43513",
+    "navigatore-2.js": "1e84d8bc504bac512e3b5f27822c4a72cfd79b8958dff5d829dd7c5df5d11c7a"
+  },
+  "transformation": "i due blocchi <script> inline spostati in file .js identici (CSP di Manifest V3); nessun altro cambiamento"
+}

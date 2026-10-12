@@ -1,4 +1,4 @@
-// Prova end-to-end di Agria Scout nel Chromium di Playwright.
+// Prova end-to-end di Agria Commercial (shell, Scout, Navigatore) nel Chromium di Playwright.
 //
 // Carica l'estensione vera, serve in locale i siti di prova di tests/fixtures con domini finti
 // (*.test) e ripercorre il lavoro del commerciale: analisi della pagina aperta, correzione a mano,
@@ -205,15 +205,17 @@ async function run(context, site, fake) {
   });
 
   console.log('\nIntestazione e stato MOCK');
-  check('intestazione AGRIA SCOUT', (await text('header')).includes('AGRIA SCOUT'));
+  check('intestazione AGRIA COMMERCIAL', (await text('header')).includes('AGRIA COMMERCIAL') && (await text('header .brand .k')) === 'Agria System');
+  equal('titolo della pagina', await panel.title(), 'Agria Commercial');
   check('badge MOCK visibile in alto', await panel.isVisible('header .badge.mock'));
   includes('scenario MOCK iniziale', await text('#hubspot-hint'), 'Scenario: Azienda non presente');
   equal('badge MOCK in alto', (await text('header [data-mode-badge]')).trim(), 'HubSpot MOCK');
   check('pulsante principale «Scansione approfondita»', (await text('#deep-scan')).trim() === 'Scansione approfondita');
 
-  console.log('\nScelta del commerciale: «Chi sta usando Agria Scout?»');
+  console.log('\nScelta del commerciale: «Chi sta usando Agria Commercial?»');
   check('nuova sessione: schermata di scelta', await panel.isVisible('#operator-picker'));
-  equal('domanda', (await text('#picker-title')).trim(), 'Chi sta usando Agria Scout?');
+  equal('domanda', (await text('#picker-title')).trim(), 'Chi sta usando Agria Commercial?');
+  check('senza commerciale: nessuna navigazione fra i moduli', await panel.isHidden('#module-nav'));
   check('pannello nascosto finché non si sceglie', await panel.isHidden('#app'));
   equal('una card per ogni commerciale del registro', JSON.stringify(await panel.$$eval('#operator-list .operator .operator-name', (n) => n.map((x) => x.textContent))),
     JSON.stringify(OPERATORS.map((o) => o.name)));
@@ -240,6 +242,74 @@ async function run(context, site, fake) {
   includes('base predefinita: casella', await text('#session-legal'), 'Usa questa base giuridica per i nuovi contatti prospect in questa sessione');
   check('base predefinita: non attiva finché il commerciale non la conferma', !(await panel.isChecked('#session-legal-basis')));
   await panel.locator('#session-legal').screenshot({ path: path.join(OUT, '0b-base-giuridica-sessione.png') });
+
+  // ---------------------------------------------------------------------------------------------
+  console.log('\nAgria Commercial: Home, navigazione, Outreach, Navigatore');
+  const shown = (id) => panel.isVisible(`#view-${id}`);
+  const noHorizontalScroll = () => panel.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
+  check('dopo la scelta del commerciale: la Home', await shown('home') && !(await shown('scout')) && !(await shown('outreach')));
+  check('navigazione visibile', await panel.isVisible('#module-nav'));
+  equal('voci della navigazione', JSON.stringify(await panel.$$eval('#module-nav .nav-item', (b) => b.map((x) => x.textContent.replace('↗', '').trim()))), JSON.stringify(['Home', 'Scout', 'Outreach', 'Navigatore']));
+  equal('Home: voce attiva', await panel.getAttribute('#nav-home', 'aria-current'), 'page');
+  includes('commerciale attivo sempre visibile', (await text('#active-user')).replace(/\s+/g, ' '), 'Commerciale attivo: Matteo Garuzzo · Cambia');
+  for (const part of ['Prossimo passo', 'Analizza un nuovo prospect', "Apri il sito dell'azienda e avvia la scansione in Scout."]) includes(`prossimo passo: ${part}`, await text('#next-step'), part);
+  equal('prossimo passo: azione', (await text('#next-step-action')).trim(), 'Apri Scout');
+  const modules = await panel.$$eval('#view-home .module-card', (cards) => cards.map((c) => c.innerText.replace(/\s+/g, ' ').trim()));
+  for (const [i, parts] of [
+    [0, ['SCOUT', 'Trova, analizza e registra nuovi prospect.', 'Apri Scout']],
+    [1, ['OUTREACH', 'Gestisci primo contatto e follow-up.', 'Disponibile prossimamente', 'Arriverà nella prossima fase.']],
+    [2, ['NAVIGATORE', 'Guida operativa durante le chiamate commerciali.', 'Apri Navigatore', 'Si apre in una nuova scheda.']],
+  ]) for (const part of parts) includes(`modulo ${i + 1}: ${part}`, modules[i], part);
+  check('Outreach: pulsante disattivato con spiegazione', await panel.isDisabled('#home-outreach') && (await panel.getAttribute('#home-outreach', 'aria-describedby')) === 'home-outreach-note');
+  check('Home: una sola azione primaria', (await panel.$$eval('#view-home .btn.primary', (b) => b.filter((x) => x.offsetParent).length)) === 1);
+  check('Home: nessuno scroll orizzontale (400 px)', await noHorizontalScroll());
+  await panel.setViewportSize({ width: 320, height: 900 });
+  check('Home: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
+  await panel.setViewportSize({ width: 400, height: 900 });
+  await shot('9-home');
+  await panel.locator('header').screenshot({ path: path.join(OUT, '9b-navigazione.png') });
+  // tastiera: Invio e Spazio sulle voci, Tab fra le voci, focus visibile
+  await panel.focus('#nav-outreach');
+  await panel.keyboard.press('Enter');
+  check('tastiera (Invio): Outreach', await shown('outreach') && !(await shown('home')));
+  equal('Outreach: segnaposto', (await text('#outreach-message')).trim(), 'Outreach sarà disponibile nella prossima fase.');
+  check('Outreach: nessuno scroll orizzontale', await noHorizontalScroll());
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '9c-outreach.png') });
+  await panel.focus('#nav-home');
+  await panel.keyboard.press('Space');
+  check('tastiera (Spazio): Home', await shown('home'));
+  await panel.keyboard.press('Tab');
+  equal('tastiera (Tab): voce successiva', await panel.evaluate(() => document.activeElement?.id), 'nav-scout');
+  check('focus visibile sulla voce', await panel.evaluate(() => getComputedStyle(document.activeElement).outlineStyle !== 'none'));
+  // il Navigatore: nuova scheda ampia, file verificato, comportamento invariato
+  const [navigator] = await Promise.all([context.waitForEvent('page'), panel.click('#home-open-navigator')]);
+  watch(navigator, 'navigatore');
+  await navigator.waitForLoadState('load');
+  check('Navigatore: nuova scheda dell\'estensione', navigator.url().endsWith('/modules/navigator/app/navigatore.html'), navigator.url());
+  equal('Navigatore: titolo', await navigator.title(), 'Navigatore Chiamata Agria');
+  await navigator.setViewportSize({ width: 1280, height: 900 });
+  await navigator.waitForFunction(() => document.body.innerText.includes('Prima di chiamare'));
+  for (const part of ['Navigatore chiamata', 'Preparazione', 'Prima di chiamare', 'Inizia la chiamata']) includes(`Navigatore: ${part}`, await navigator.evaluate(() => document.body.innerText), part);
+  check('Navigatore: contenuti caricati', await navigator.evaluate(() => Array.isArray(window.AGRIA?.phases) || typeof window.AGRIA?.nodes === 'object'));
+  await navigator.evaluate(() => localStorage.setItem('agria-e2e-prova', 'ok'));
+  await navigator.reload();
+  equal('Navigatore: i dati restano nel browser (localStorage)', await navigator.evaluate(() => localStorage.getItem('agria-e2e-prova')), 'ok');
+  await navigator.evaluate(() => localStorage.removeItem('agria-e2e-prova'));
+  await navigator.screenshot({ path: path.join(OUT, '9d-navigatore.png') });
+  await navigator.close();
+  await panel.bringToFront();
+  check('dopo il Navigatore il pannello resta dov\'era', await shown('home'));
+  const [byNav] = await Promise.all([context.waitForEvent('page'), panel.click('#nav-navigator')]);
+  check('anche dalla navigazione', byNav.url().endsWith('/modules/navigator/app/navigatore.html'));
+  await byNav.close();
+  await panel.bringToFront();
+  await panel.focus('#next-step-action');
+  await panel.keyboard.press('Enter');
+  check('«Apri Scout» (prossimo passo): Scout', await shown('scout') && !(await shown('home')));
+  equal('Scout: voce attiva', await panel.getAttribute('#nav-scout', 'aria-current'), 'page');
+  equal('Scout: il focus passa al modulo', await panel.evaluate(() => document.activeElement?.id), 'scout-title');
+  equal('commerciale attivo coerente con il proprietario', await text('#company-hubspot_owner_id'), ownerText(MATTEO));
+  check('Scout: nessuno scroll orizzontale', await noHorizontalScroll());
   check('nulla nelle impostazioni permanenti', !JSON.stringify(await panel.evaluate(() => chrome.storage.local.get(null))).includes(MATTEO.hubspotOwnerId));
 
   console.log('\nImpostazioni: commerciali disponibili, limite pagine, salvataggio automatico');
@@ -249,7 +319,7 @@ async function run(context, site, fake) {
   await options.waitForFunction(() => document.querySelector('input[name="mockScenario"]:checked'));
   equal('limite pagine predefinito', await options.inputValue('#max-pages'), '30');
   includes('salvataggio automatico dichiarato', await options.textContent('#autosave'), 'Impostazioni salvate automaticamente');
-  equal('pulsante per tornare al pannello', (await options.textContent('#back')).trim(), '← Torna ad Agria Scout');
+  equal('pulsante per tornare al pannello', (await options.textContent('#back')).trim(), '← Torna ad Agria Commercial');
   includes('sezione «Commerciali disponibili»', await options.textContent('#operators-title'), 'Commerciali disponibili');
   await options.waitForFunction(() => document.querySelector('#operators .chip'));
   const operatorRows = await options.$$eval('#operators li', (li) => li.map((x) => x.textContent));
@@ -291,7 +361,8 @@ async function run(context, site, fake) {
   equal('città', await value('company-city'), 'Assisi');
   equal('regione (state)', await value('company-state'), 'Umbria');
   equal('paese', await value('company-country'), 'Italia');
-  includes('lead status', await text('#company-hs_lead_status'), 'Da contattare (NEW)');
+  equal('lead status: etichetta, non il codice tecnico', (await text('#company-hs_lead_status')).trim(), 'Da contattare');
+  check('etichette dei campi senza nomi tecnici HubSpot', !(await text('label[for="company-hs_lead_status"]')).includes('hs_lead_status'));
   includes('fonte e affidabilità mostrate', await text('#company-name-meta'), 'Alta affidabilità');
   equal('nessun contatto inventato', await value('contact-firstname'), '');
   includes('avviso sul JSON-LD rotto', await text('#status-notes'), 'dati strutturati non era leggibile');
@@ -368,6 +439,17 @@ async function run(context, site, fake) {
     check(`contesto rapido senza dati societari: ${legal}`, !quick.includes(legal));
   }
   check('fonte cliccabile', await panel.$$eval('#company-email_aziendale_principale-meta a.src', (a) => a.length > 0 && a[0].href.startsWith('http://agriturismo-lamora.test')));
+  equal('dopo la scansione l\'azione primaria è la verifica', (await panel.$$eval('#view-scout .btn.primary', (b) => b.filter((x) => x.offsetParent).map((x) => x.id))).join(), 'verify');
+
+  console.log('\nHome durante il lavoro: prossimo passo e ritorno a Scout senza perdere dati');
+  await panel.click('#nav-home');
+  includes('prossimo passo dopo la scansione', await text('#next-step'), 'Verifica Agriturismo La Mora in HubSpot');
+  await panel.click('#next-step-action');
+  check('di nuovo in Scout', await panel.isVisible('#view-scout'));
+  equal('correzione a mano ancora lì', await value('company-city'), 'Santa Maria degli Angeli');
+  includes('riepilogo ancora lì', await text('#summary'), '10 pagine');
+  await panel.evaluate(() => window.scrollTo(0, 0));
+  await panel.screenshot({ path: path.join(OUT, '9e-scout.png') });
 
   console.log('\nContatto (HubSpot) e persone rilevate');
   equal('contatto: nome', await value('contact-firstname'), 'Maria');
@@ -452,7 +534,9 @@ async function run(context, site, fake) {
   equal('scenario "non presente"', v.kind, 'not_found');
   includes('esito "non presente"', v.text, '✓ Non presente in HubSpot');
   includes('esito dichiarato come simulato', v.text, 'MOCK');
-  check('MOCK: anteprima e «Crea Azienda in HubSpot» (simulata)', await panel.isVisible('#create-company') && (await text('#company-step')).includes('Da contattare (NEW)'));
+  check('MOCK: anteprima e «Crea Azienda in HubSpot» (simulata)', await panel.isVisible('#create-company') && (await text('#company-step')).includes('Da contattare'));
+  check('anteprima senza codici tecnici', !(await text('#company-step')).includes('hs_lead_status') && !(await text('#company-step')).includes('(NEW)'));
+  check('una sola azione primaria: «Crea Azienda»', (await panel.$$eval('#view-scout .btn.primary', (b) => b.filter((x) => x.offsetParent).map((x) => x.id))).join() === 'create-company');
   const hint = (t) => panel.waitForFunction((x) => document.querySelector('#hubspot-hint').textContent.includes(x), t);
   await options.check('input[value="found"]');
   await hint('Azienda già presente');
@@ -640,8 +724,8 @@ async function run(context, site, fake) {
 
   // ---------------------------------------------------------------------------------------------
   console.log('\nHubSpot REALE (finto HubSpot locale: nessuna chiamata al CRM vero)');
-  const blocker = () => panel.textContent('#hubspot-blocker').then((t) => t.trim());
-  const blockerIs = (t) => panel.waitForFunction((x) => document.querySelector('#hubspot-blocker').textContent.trim() === x, t, { timeout: 5000 }).then(() => true, () => false);
+  const blocker = () => panel.evaluate(() => document.querySelector('#hubspot-blocker .fb-text')?.textContent.trim() || '');
+  const blockerIs = (t) => panel.waitForFunction((x) => (document.querySelector('#hubspot-blocker .fb-text')?.textContent.trim() || '') === x, t, { timeout: 5000 }).then(() => true, () => false);
   const lineIs = (sel, t) => options.waitForFunction(([s, x]) => document.querySelector(s).textContent.includes(x), [sel, t], { timeout: 8000 }).then(() => true, () => false);
   await options.check('input[name="mode"][value="real"]');
   await panel.waitForFunction(() => document.querySelector('header [data-mode-badge]').textContent.trim() === 'HubSpot REALE');
@@ -689,8 +773,8 @@ async function run(context, site, fake) {
   v = await verify();
   equal('di nuovo disponibile', v.kind, 'not_found');
   const perticaiaPreview = await text('#company-step');
-  check('anteprima: owner del commerciale attivo', perticaiaPreview.includes(`${ALESSANDRO.name} (${ALESSANDRO.hubspotOwnerId})`), perticaiaPreview);
-  check('anteprima cantina: niente tipo struttura', !perticaiaPreview.includes('tipo_struttura_hospitality'));
+  check('anteprima: owner del commerciale attivo', perticaiaPreview.includes(`${ALESSANDRO.name} · ID ${ALESSANDRO.hubspotOwnerId}`), perticaiaPreview);
+  check('anteprima cantina: niente tipo struttura', !perticaiaPreview.includes('Tipo struttura Hospitality'));
   fake.requireProperty('companies', 'industry');
   await press('#create-company');
   await panel.waitForFunction(() => document.querySelector('#company-step').textContent.includes('Azienda non creata'), null, { timeout: 15000 });
@@ -770,8 +854,11 @@ async function run(context, site, fake) {
   // base giuridica: serve solo per creare il Contatto, la verifica funziona comunque
   check('senza base giuridica: Verifica HubSpot disponibile', await panel.isEnabled('#verify'));
   check('senza base giuridica: «Crea Contatto» disattivato', await panel.isDisabled('#create-contact'));
-  equal('senza base giuridica: messaggio', (await text('#legal-basis-required')).trim(), 'Conferma la base giuridica per poter creare il Contatto in HubSpot.');
+  includes('senza base giuridica: messaggio', await text('#legal-basis-required'), 'Conferma la base giuridica per poter creare il Contatto in HubSpot.');
+  // la base predefinita di sessione sta nella Home: si attiva lì e si torna a Scout
+  await panel.click('#nav-home');
   await panel.check('#session-legal-basis');
+  await panel.click('#nav-scout');
   await panel.waitForFunction(() => !document.querySelector('#legal-basis-required'), null, { timeout: 5000 }).catch(() => {});
   check('base di sessione confermata: «Crea Contatto» attivo', await panel.isEnabled('#create-contact'));
   includes('form Contatto: base ereditata', await text('#contact-hs_legal_basis-meta'), 'Predefinita per questa sessione');
@@ -804,7 +891,7 @@ async function run(context, site, fake) {
   v = await verify();
   equal('azienda assente: «✓ Non presente in HubSpot»', v.kind, 'not_found');
   const preview = await text('#company-step');
-  for (const part of ['Verranno scritti questi dati', 'hubspot_owner_id', `${ALESSANDRO.name} (${ALESSANDRO.hubspotOwnerId})`, 'Da contattare (NEW)', 'tipo_struttura_hospitality', 'Agriturismo']) includes(`anteprima: ${part}`, preview, part);
+  for (const part of ['Verranno scritti questi dati', 'Proprietario HubSpot', `${ALESSANDRO.name} · ID ${ALESSANDRO.hubspotOwnerId}`, 'Da contattare', 'Tipo struttura Hospitality', 'Agriturismo']) includes(`anteprima: ${part}`, preview, part);
   equal('la verifica non crea nulla', fake.state.companies.length, companiesBefore);
   // doppio clic: un solo record
   await panel.evaluate(() => {
@@ -845,6 +932,14 @@ async function run(context, site, fake) {
   const audit = await text('#audit-list');
   for (const part of ['Verifica HubSpot', 'Creazione Azienda', 'Successo', 'Creazione Contatto e associazione', ALESSANDRO.name, `ID ${created.id}`]) includes(`registro: ${part}`, audit, part);
   check('registro senza chiave', !audit.includes(FAKE_KEY));
+  // Home: il prossimo passo segue lo stato di Scout, senza perdere nulla
+  const companyBefore = await value('company-name');
+  await panel.click('#nav-home');
+  for (const part of ['Azienda salvata in HubSpot', 'Agriturismo La Mora: Azienda e Contatto creati', 'Il primo contatto arriverà con Outreach.']) includes(`Home dopo la creazione: ${part}`, await text('#next-step'), part);
+  check('Home dopo la creazione: nessuna azione Outreach', !(await panel.$('#next-step-action')));
+  await panel.click('#nav-scout');
+  equal('ritorno a Scout: dati intatti', await value('company-name'), companyBefore);
+  includes('ritorno a Scout: azienda ancora creata', await text('#company-step'), '✓ Azienda creata in HubSpot');
   await shot('5-hubspot-reale');
   await panel.locator('section.hubspot').screenshot({ path: path.join(OUT, '5b-sezione-hubspot.png') });
 
@@ -871,7 +966,7 @@ async function run(context, site, fake) {
   check('nuovo commerciale: base da confermare di nuovo', !(await panel.isChecked('#session-legal-basis')));
   equal('nessuna conferma in sessione', await panel.evaluate(() => chrome.storage.session.get('legalBasisDefault').then((r) => r.legalBasisDefault ?? null)), null);
 
-  console.log('\nImpostazioni: «← Torna ad Agria Scout»');
+  console.log('\nImpostazioni: «← Torna ad Agria Commercial»');
   const closing = options.waitForEvent('close', { timeout: 10000 }).then(() => true, () => false);
   await options.click('#back').catch(() => {}); // la scheda si chiude durante il clic
   check('la scheda delle Impostazioni si chiude e si torna al pannello', await closing);
@@ -891,11 +986,12 @@ async function newSession(context) {
   panel.on('pageerror', (e) => errors.push(e.message));
   await panel.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
   await panel.waitForFunction(() => document.querySelector('#status-text').textContent !== 'Caricamento…');
-  check('nuova sessione: «Chi sta usando Agria Scout?» di nuovo', await panel.isVisible('#operator-picker') && await panel.isHidden('#app'));
+  check('nuova sessione: «Chi sta usando Agria Commercial?» di nuovo', await panel.isVisible('#operator-picker') && await panel.isHidden('#app'));
   equal('nuova sessione: nessun commerciale attivo', await panel.evaluate(() => chrome.storage.session.get('activeOperator').then((r) => r.activeOperator ?? null)), null);
   equal('nuova sessione: le impostazioni restano', await panel.evaluate(() => chrome.storage.local.get('config').then((r) => r.config.scan.maxPages)), 35);
   await panel.click(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"]`);
   equal('nuova sessione: owner del commerciale scelto', await panel.textContent('#company-hubspot_owner_id'), ownerText(MATTEO));
+  check('nuova sessione: si riparte dalla Home', await panel.isVisible('#view-home') && await panel.isHidden('#view-scout'));
   check('nuova sessione: nessun errore JavaScript', errors.length === 0, errors.join(' | '));
 }
 

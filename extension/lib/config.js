@@ -1,4 +1,4 @@
-// Impostazioni di Agria Scout, salvate in chrome.storage.local di questo browser: modalità HubSpot
+// Impostazioni di Agria Commercial, salvate in chrome.storage.local di questo browser: modalità HubSpot
 // (MOCK o reale), scenario MOCK, limite della scansione. Qui non c'è nessuna credenziale: la Service
 // Key la gestisce solo il service worker (hubspotService.js), in una voce a parte.
 // Il proprietario HubSpot non è un'impostazione: è il commerciale scelto all'apertura (operators.js).

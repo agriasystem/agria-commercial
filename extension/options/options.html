@@ -3,16 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Impostazioni · Agria Scout</title>
+<title>Impostazioni · Agria Commercial</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="../ui/agria.css">
 <script type="module" src="options.js"></script>
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
+  <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA COMMERCIAL</h1></div>
   <span class="badge mock" data-mode-badge>HubSpot MOCK</span>
-  <button id="back" class="tbtn" type="button">← Torna ad Agria Scout</button>
+  <button id="back" class="tbtn" type="button">← Torna ad Agria Commercial</button>
 </header>
 
 <main class="wrap narrow">
@@ -21,7 +21,7 @@
   <form id="settings" class="stack" novalidate>
     <section class="card" aria-labelledby="operators-title">
       <h3 id="operators-title" class="eyebrow">Commerciali disponibili</h3>
-      <p class="hint">Chi usa Agria Scout si sceglie all'apertura del pannello («Chi sta usando Agria Scout?») e resta attivo fino alla chiusura di Chrome. Il suo Owner ID diventa <code>hubspot_owner_id</code> di Azienda e Contatto: non viene mai dedotto dal sito.</p>
+      <p class="hint">Chi usa Agria Commercial si sceglie all'apertura del pannello («Chi sta usando Agria Commercial?») e resta attivo fino alla chiusura di Chrome. Diventa il Proprietario HubSpot di Azienda e Contatto: non viene mai dedotto dal sito.</p>
       <ul id="operators" class="operators"></ul>
     </section>
 
@@ -58,7 +58,7 @@
       </div>
       <p id="key-status" class="key-status" role="status"></p>
       <p id="connection-status" class="key-status" role="status" aria-live="polite"></p>
-      <p id="key-hint" class="hint key-note">La chiave resta solo in questo browser (<code>chrome.storage.local</code>, mai sincronizzata) e la usa solo il service worker di Agria Scout: dopo il salvataggio non viene più mostrata, nemmeno in parte. <code>chrome.storage.local</code> non è un archivio cifrato: è una scelta temporanea per l'uso interno Agria a costo zero.</p>
+      <p id="key-hint" class="hint key-note">La chiave resta solo in questo browser (<code>chrome.storage.local</code>, mai sincronizzata) e la usa solo il service worker di Agria Commercial: dopo il salvataggio non viene più mostrata, nemmeno in parte. <code>chrome.storage.local</code> non è un archivio cifrato: è una scelta temporanea per l'uso interno Agria a costo zero.</p>
     </section>
 
     <section class="card" aria-labelledby="scenario-title">
@@ -77,10 +77,10 @@
     <section class="card" aria-labelledby="privacy-title">
       <h3 id="privacy-title" class="eyebrow">Dati e privacy</h3>
       <ul class="plain">
-        <li>Agria Scout legge le pagine solo quando premi «Scansione approfondita» o «Analizza solo questa pagina», e non le modifica.</li>
+        <li>Scout legge le pagine solo quando premi «Scansione approfondita» o «Analizza solo questa pagina», e non le modifica.</li>
         <li>La scansione scarica soltanto pagine pubbliche dello stesso sito, una alla volta, senza cookie e senza inviare dati.</li>
         <li>I dati trovati e queste impostazioni restano in questo browser: nessun server, nessun servizio a pagamento, nessuna sincronizzazione. Il commerciale attivo vale solo per la sessione di Chrome in corso.</li>
-        <li>HubSpot reale: le richieste partono solo da Agria Scout verso <code>api.hubapi.com</code>, con la Service Key salvata qui. Verifica e creazione si avviano solo con un tuo clic; i record già presenti in HubSpot non vengono mai modificati.</li>
+        <li>HubSpot reale: le richieste partono solo da Agria Commercial verso <code>api.hubapi.com</code>, con la Service Key salvata qui. Verifica e creazione si avviano solo con un tuo clic; i record già presenti in HubSpot non vengono mai modificati.</li>
       </ul>
     </section>
   </form>

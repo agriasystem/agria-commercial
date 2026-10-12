@@ -1,7 +1,8 @@
-// Pannello laterale di Agria Scout: scelta del commerciale, scansione del sito del prospect, form
-// Azienda e Contatto con le proprietà HubSpot, persone e dati rilevati, sezione HubSpot (verifica e
-// creazione, vedi hubspotPanel.js: passa sempre dal service worker, che custodisce la Service Key).
-// Senza un commerciale attivo nella sessione di Chrome il pannello mostra solo la sua scelta.
+// Pannello laterale di Agria Commercial. Senza un commerciale attivo nella sessione di Chrome mostra
+// solo la sua scelta; poi la shell (shell/shell.js): Home, Scout, Outreach e il Navigatore in una
+// scheda ampia. Questo file è il modulo Scout: scansione del sito del prospect, form Azienda e
+// Contatto con le proprietà HubSpot, persone e dati rilevati, sezione HubSpot (verifica e creazione,
+// vedi hubspotPanel.js: passa sempre dal service worker, che custodisce la Service Key).
 
 import { analyzeSnapshot } from '../lib/parser.js';
 import { pageTypeOf } from '../lib/discovery.js';
@@ -18,6 +19,8 @@ import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normali
 import { loadConfig, normalizeConfig, onConfigChange } from '../lib/config.js';
 import { loadActiveOperator, onOperatorChange, OPERATORS, selectOperator } from '../lib/operators.js';
 import { createHubspotPanel } from './hubspotPanel.js';
+import { createShell } from '../shell/shell.js';
+import { scoutNextStep } from '../lib/nextStep.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
 import {
   allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
@@ -48,6 +51,7 @@ let sessionLegalBasis = false; // base giuridica predefinita confermata per ques
 let busy = ''; // '' | 'scan' | 'analyze'
 let scanController = null;
 let hub = null; // sezione HubSpot (hubspotPanel.js)
+let shell = null; // navigazione fra i moduli (shell/shell.js)
 let saveTimer = null;
 let clearTimer = null;
 
@@ -59,8 +63,9 @@ function buildForms() {
     const box = $(`#${section}-fields`);
     for (const prop of props) {
       const id = `${section}-${prop.name}`;
+      // l'etichetta per il commerciale; il nome tecnico HubSpot resta solo nel suggerimento al passaggio
       const wrap = el('div', { id: `${id}-field`, class: prop.half ? 'field half' : 'field' },
-        el('label', { for: id }, prop.label, ' ', el('code', {}, prop.name)));
+        el('label', { for: id, title: prop.name }, prop.label));
       let control;
       if (prop.input === 'select') {
         control = el('select', { id }, el('option', { value: '' }, '—'), ...prop.options.map((o) => el('option', { value: o }, o)));
@@ -143,7 +148,7 @@ function renderField(section, prop) {
   const field = draft[section][prop.name];
   const control = $(`#${section}-${prop.name}`);
   if (prop.input === 'fixed') {
-    control.textContent = `${LEAD_STATUS.label} (${field.value || LEAD_STATUS.value})`;
+    control.textContent = LEAD_STATUS.label;
   } else if (control.value !== field.value) {
     control.value = prop.input === 'select' && !prop.options.includes(field.value) ? '' : field.value;
   }
@@ -202,6 +207,7 @@ function renderSiteData() {
   const summary = $('#summary');
   summary.hidden = !pages.length;
   summary.textContent = pages.length ? summaryOf(draft.site) : '';
+  renderScanButton();
 }
 
 function renderAll() {
@@ -209,6 +215,16 @@ function renderAll() {
   renderPeople();
   renderSiteData();
   hub.render();
+  refreshHome();
+}
+
+// la Home mostra il prossimo passo calcolato dallo stato attuale (nessuna copia)
+function refreshHome() {
+  if (shell?.current === 'home') shell.renderHome();
+}
+
+function nextStep() {
+  return operator ? scoutNextStep(draft, { mode: hub.mode, sessionLegalBasis }) : null;
 }
 
 function onEdit(section, name, value) {
@@ -236,7 +252,7 @@ function afterEdit(section, name, { rerender = true } = {}) {
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    chrome.storage.session.set({ draft }).catch((err) => console.warn('[Agria Scout] bozza non salvata:', err));
+    chrome.storage.session.set({ draft }).catch((err) => console.warn('[Agria Commercial] bozza non salvata:', err));
   }, 300);
 }
 
@@ -263,12 +279,19 @@ function setProgress(progress) {
   setStatus('busy', phase === 'sitemap' ? 'Lettura della sitemap…' : `Analisi pagina ${index} di ${total}…`);
 }
 
+// la scansione è l'azione primaria solo finché non ci sono dati: dopo tocca alla verifica HubSpot
+function renderScanButton() {
+  const scan = $('#deep-scan');
+  scan.textContent = busy === 'scan' ? 'Annulla scansione' : 'Scansione approfondita';
+  scan.classList.toggle('danger', busy === 'scan');
+  scan.classList.toggle('primary', busy !== 'scan' && draft.site.pages.length === 0);
+  scan.setAttribute('aria-busy', String(busy === 'scan'));
+}
+
 function setBusy(mode) {
   busy = mode;
+  renderScanButton();
   const scan = $('#deep-scan');
-  scan.textContent = mode === 'scan' ? 'Annulla scansione' : 'Scansione approfondita';
-  scan.classList.toggle('danger', mode === 'scan');
-  scan.classList.toggle('primary', mode !== 'scan');
   scan.disabled = mode === 'analyze';
   $('#analyze').disabled = Boolean(mode);
   $('#clear').disabled = Boolean(mode);
@@ -321,7 +344,7 @@ async function onDeepScan() {
   } catch (err) {
     if (err instanceof PageReadError) setStatus('error', err.message);
     else {
-      console.error('[Agria Scout] scansione non riuscita:', err);
+      console.error('[Agria Commercial] scansione non riuscita:', err);
       setStatus('error', `Scansione non riuscita: ${err?.message || err}`);
     }
   } finally {
@@ -343,7 +366,7 @@ async function onAnalyze() {
   } catch (err) {
     if (err instanceof PageReadError) setStatus('error', err.message);
     else {
-      console.error('[Agria Scout] analisi non riuscita:', err);
+      console.error('[Agria Commercial] analisi non riuscita:', err);
       setStatus('error', `Analisi non riuscita: ${err?.message || err}`);
     }
   } finally {
@@ -393,6 +416,7 @@ function showPicker(open) {
   const picking = open || !operator;
   $('#operator-picker').hidden = !picking;
   $('#app').hidden = picking;
+  $('#module-nav').hidden = picking;
   $('#operator-cancel').hidden = !operator;
   $('#operator-error').textContent = '';
   for (const b of document.querySelectorAll('#operator-list .operator')) b.setAttribute('aria-current', String(b.dataset.ownerId === operator?.hubspotOwnerId));
@@ -405,6 +429,7 @@ function applyOperator(next) {
   for (const [section, props] of Object.entries(PROPS)) for (const prop of props) if (prop.input === 'owner') renderOwner(section, prop);
   showPicker(false);
   hub.render(); // l'anteprima HubSpot mostra il nuovo proprietario
+  refreshHome();
   refreshSessionLegalBasis(); // la base predefinita vale solo per il commerciale che l'ha confermata
 }
 
@@ -428,6 +453,7 @@ async function refreshSessionLegalBasis() {
   $('#session-legal-basis').checked = sessionLegalBasis;
   renderReadiness();
   hub.render();
+  refreshHome();
 }
 
 function buildSessionLegalBasis() {
@@ -469,6 +495,7 @@ async function init() {
     needsOperator,
   });
   buildSessionLegalBasis();
+  shell = createShell({ $, nextStep, onView: () => hub.render() });
   onConfigChange((next) => {
     // un altro scenario MOCK o un'altra modalità: la verifica fatta prima non vale più
     if (next.hubspot.mode !== config.hubspot.mode || next.hubspot.mockScenario !== config.hubspot.mockScenario) hub.dataChanged();
@@ -479,16 +506,17 @@ async function init() {
   try {
     config = await loadConfig();
   } catch (err) {
-    console.warn('[Agria Scout] impostazioni non lette, uso quelle predefinite:', err?.message || err);
+    console.warn('[Agria Commercial] impostazioni non lette, uso quelle predefinite:', err?.message || err);
   }
   operator = await loadActiveOperator().catch((err) => {
-    console.warn('[Agria Scout] commerciale attivo non letto:', err);
+    console.warn('[Agria Commercial] commerciale attivo non letto:', err);
     return null;
   });
 
   const saved = await chrome.storage.session.get('draft').catch(() => ({}));
   draft = refreshForms(restoreDraft(saved.draft));
   await hub.init();
+  await shell.init(); // la vista aperta prima in questa sessione, altrimenti la Home
   renderAll();
   applyOperator(operator);
   if (draft.site.pages.length) setStatus('ok', "Dati ripresi dall'ultima analisi.", draft.site.notes);
@@ -496,7 +524,7 @@ async function init() {
 }
 
 init().catch((err) => {
-  console.error('[Agria Scout] avvio non riuscito:', err);
+  console.error('[Agria Commercial] avvio non riuscito:', err);
   setStatus('error', `Avvio non riuscito: ${err?.message || err}`);
   $('#app').hidden = false; // l'errore resta visibile; scansione e verifica chiedono comunque il commerciale
 });

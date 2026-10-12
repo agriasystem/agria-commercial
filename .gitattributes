@@ -1,0 +1,3 @@
+# Copia generata del Navigatore (tools/sync-navigator.js): byte identici al file buildato del suo
+# repository, verificati con SHA-256 in tests/navigator.test.js. Nessuna conversione dei fine riga.
+extension/modules/navigator/app/** -text

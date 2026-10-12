@@ -16,10 +16,14 @@ const FILES = walk(EXT);
 const JS = FILES.filter((f) => f.endsWith('.js'));
 const HTML = FILES.filter((f) => f.endsWith('.html'));
 const manifest = JSON.parse(read('manifest.json'));
+// copia verificata del Navigatore (tools/sync-navigator.js, tests/navigator.test.js): codice di un altro
+// repository, identico al suo file buildato. Costruisce la propria interfaccia con innerHTML (dati suoi,
+// nessun dato dai siti) e la CSP delle pagine di estensione blocca comunque ogni script inline iniettato.
+const VENDORED = (file) => file.startsWith('modules/navigator/app/');
 
 test('manifest MV3 completo', () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.name, 'Agria Scout');
+  assert.equal(manifest.name, 'Agria Commercial');
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.ok(manifest.description.length <= 132, 'descrizione entro 132 caratteri');
   assert.ok(Number(manifest.minimum_chrome_version) >= 116, 'setPanelBehavior richiede Chrome 116');
@@ -107,7 +111,8 @@ test('rete solo in lib/fetchPage.js (GET dei siti) e lib/hubspotClient.js (solo 
     }
     assert.ok(!/['"](PATCH|DELETE)['"]/.test(src), `${file}: nessuna modifica o cancellazione di record`);
     assert.ok(!/\beval\s*\(|new\s+Function\s*\(/.test(src), `${file}: codice dinamico`);
-    assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src), `${file}: HTML da stringhe`);
+    if (VENDORED(file)) assert.ok(!/\bchrome\.|document\.write/.test(src), `${file}: il Navigatore non usa API dell'estensione`);
+    else assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src), `${file}: HTML da stringhe`);
   }
   const fetcher = read('lib/fetchPage.js');
   assert.match(fetcher, /method: 'GET'/);

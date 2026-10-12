@@ -1,5 +1,5 @@
 // HubSpot finto per i test (unitari ed e2e): MAI il CRM reale.
-// Riproduce gli endpoint 2026-09 usati da Agria Scout con un archivio in memoria, controlla il
+// Riproduce gli endpoint 2026-09 usati da Agria Commercial con un archivio in memoria, controlla il
 // Bearer token, registra ogni richiesta e permette di forzare risposte (401, 403, 429, 5xx,
 // errori di validazione) per provare la gestione degli errori.
 

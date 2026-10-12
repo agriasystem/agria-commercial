@@ -5,7 +5,8 @@
 // i record esistenti si mostrano soltanto. L'esito resta nella bozza del prospect (per modalità),
 // così un'operazione a metà si riprende senza creare di nuovo l'Azienda.
 
-import { el } from './render.js';
+import { el } from '../ui/dom.js';
+import { feedback } from '../ui/feedback.js';
 import {
   clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, legalBasisEffective, preflightCompany,
   updateHubspot,
@@ -18,18 +19,20 @@ import { companyPayload, contactPayload, propertyLabel } from '../lib/hubspotPay
 import { operatorById } from '../lib/operators.js';
 
 const STALE = 'I dati sono cambiati durante la verifica: premi di nuovo «Verifica HubSpot».';
-const UNAVAILABLE = { ok: false, error: { code: 'unavailable', message: 'Il servizio HubSpot di Agria Scout non risponde: chiudi e riapri il pannello.' } };
+const UNAVAILABLE = { ok: false, error: { code: 'unavailable', message: 'Il servizio HubSpot di Agria Commercial non risponde: chiudi e riapri il pannello.' } };
 
 const time = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
-// nei record trovati l'etichetta del portale; nell'anteprima anche il valore che si scrive
+// sempre l'etichetta del portale, mai il valore tecnico quando c'è un nome per il commerciale
 const leadLabel = (v) => leadStatusLabel(v) || '—';
-const leadValue = (v) => (leadStatusLabel(v) !== v ? `${leadStatusLabel(v)} (${v})` : v);
 const ownerLabel = (id, name = '') => name || operatorById(id)?.name || (id ? `ID owner ${id}` : '—');
 const link = (url, text) => (/^https:\/\//.test(url || '') ? el('a', { class: 'src', href: url, target: '_blank', rel: 'noopener noreferrer' }, text) : null);
 const lines = (text) => String(text || '').split('\n').filter(Boolean).map((l) => el('p', {}, l));
+const mockNote = (text) => el('p', { class: 'mocknote' }, text);
+// l'id serve a ritrovare il messaggio (e ai test): feedback(...) con un identificativo
+const withId = (id, node) => Object.assign(node, { id });
 
 function recordCard(m, kind) {
   const facts = kind === 'company'
@@ -46,12 +49,12 @@ function recordCard(m, kind) {
 
 function preview(properties) {
   const value = (name, v) => {
-    if (name === 'hubspot_owner_id') return `${ownerLabel(v)} (${v})`;
-    if (name === 'hs_lead_status') return leadValue(v);
+    if (name === 'hubspot_owner_id') return `${ownerLabel(v)} · ID ${v}`;
+    if (name === 'hs_lead_status') return leadLabel(v);
     return v.length > 160 ? `${v.slice(0, 160)}…` : v;
   };
   return el('dl', { class: 'preview' }, ...Object.entries(properties).flatMap(([k, v]) => [
-    el('dt', {}, propertyLabel(k), ' ', el('code', {}, k)), el('dd', {}, value(k, v)),
+    el('dt', {}, propertyLabel(k)), el('dd', {}, value(k, v)),
   ]));
 }
 
@@ -152,10 +155,12 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
   function renderVerify(st) {
     const box = $('#verify-result');
     const v = st.verification;
+    // kind: l'esito della verifica (not_found | warn | found | error); tone: il componente di feedback
+    const TONE = { not_found: 'success', warn: 'warning', found: 'blocked', error: 'error' };
     const show = (kind, title, ...children) => {
       box.dataset.kind = kind;
-      box.replaceChildren(el('strong', {}, title), ...children);
-      if (v?.mock || (kind === 'error' && status.mode === 'mock')) box.append(el('p', { class: 'mocknote' }, 'Risposta simulata (MOCK): nessun dato letto o scritto su HubSpot.'));
+      const mock = v?.mock || (kind === 'error' && status.mode === 'mock');
+      box.replaceChildren(feedback(TONE[kind], title, ...children, mock ? mockNote('Risposta simulata (MOCK): nessun dato letto o scritto su HubSpot.') : null));
       box.hidden = false;
     };
     if (verifyError?.code === 'stale') return show('warn', 'Verifica da ripetere', ...lines(verifyError.message));
@@ -169,10 +174,10 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
       return undefined;
     }
     const cards = v.matches.map((m) => recordCard(m, 'company'));
-    if (v.outcome === 'none') return show('not_found', '✓ Non presente in HubSpot', el('p', {}, 'Nessuna azienda con lo stesso dominio, email, telefono o nome e città.'));
-    if (v.outcome === 'possible') return show('warn', '⚠ Possibile duplicato', el('p', {}, 'Possibile azienda già presente (un solo segnale): controlla in HubSpot prima di creare.'), ...cards);
-    if (v.outcome === 'race') return show('found', '⛔ Azienda già presente in HubSpot', el('p', {}, v.message), ...cards);
-    return show('found', '⛔ Azienda già presente in HubSpot', el('p', {}, 'Duplicato certo: nessuna nuova azienda verrà creata. Lavora sul record esistente.'), ...cards);
+    if (v.outcome === 'none') return show('not_found', 'Non presente in HubSpot', el('p', {}, 'Nessuna azienda con lo stesso dominio, email, telefono o nome e città.'));
+    if (v.outcome === 'possible') return show('warn', 'Possibile duplicato', el('p', {}, 'Possibile azienda già presente (un solo segnale): controlla in HubSpot prima di creare.'), ...cards);
+    if (v.outcome === 'race') return show('found', 'Azienda già presente in HubSpot', el('p', {}, v.message), ...cards);
+    return show('found', 'Azienda già presente in HubSpot', el('p', {}, 'Duplicato certo: nessuna nuova azienda verrà creata. Lavora sul record esistente.'), ...cards);
   }
 
   function renderCompanyStep(st) {
@@ -180,13 +185,12 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
     const v = st.verification;
     if (st.company) {
       const c = st.company;
-      box.replaceChildren(el('div', { class: 'result', 'data-kind': 'not_found' },
-        el('strong', {}, '✓ Azienda creata in HubSpot'),
+      box.replaceChildren(feedback('success', 'Azienda creata in HubSpot',
         el('p', {}, c.name),
         el('p', { class: 'hs-id' }, `Record ID ${c.id}`),
         el('p', {}, `Creata il ${time(c.createdAt)} · Proprietario: ${ownerLabel(c.ownerId, c.ownerName)}`),
         link(c.url, 'Apri in HubSpot'),
-        c.mock ? el('p', { class: 'mocknote' }, 'Simulazione (MOCK): nessun record creato davvero.') : null));
+        c.mock ? mockNote('Simulazione (MOCK): nessun record creato davvero.') : null));
       box.hidden = false;
       return;
     }
@@ -209,12 +213,9 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
       children.push(el('label', { class: 'confirm' }, ack, " Ho controllato in HubSpot: è un'azienda diversa"));
     }
     children.push(el('p', { class: 'hint' }, 'Verranno scritti questi dati (solo i campi compilati):'), preview(properties));
-    if (errors.length) children.push(el('div', { class: 'result', 'data-kind': 'warn' }, el('strong', {}, 'Da correggere prima della creazione'), ...errors.map((e) => el('p', {}, e))));
-    if (!preflight.ok) {
-      children.push(el('div', { id: 'preflight-error', class: 'result', 'data-kind': 'error' },
-        el('strong', {}, preflight.message), el('p', {}, `Campi: ${preflight.missing.join(', ')}.`)));
-    }
-    if (st.companyError) children.push(el('div', { class: 'result', 'data-kind': 'error' }, el('strong', {}, 'Azienda non creata'), ...lines(st.companyError)));
+    if (errors.length) children.push(feedback('warning', 'Da correggere prima della creazione', ...errors.map((e) => el('p', {}, e))));
+    if (!preflight.ok) children.push(withId('preflight-error', feedback('blocked', preflight.message, el('p', {}, `Campi: ${preflight.missing.join(', ')}.`))));
+    if (st.companyError) children.push(feedback('error', 'Azienda non creata', ...lines(st.companyError)));
     const blocked = Boolean(busy) || !status.ready || errors.length > 0 || !preflight.ok || (v.outcome === 'possible' && !st.acknowledged);
     children.push(el('button', { id: 'create-company', class: 'btn primary wide', type: 'button', disabled: blocked, onclick: onCreateCompany },
       busy === 'company' ? 'Creazione in corso…' : 'Crea Azienda in HubSpot'));
@@ -234,22 +235,23 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
     const draft = getDraft();
     if (st.contact) {
       const c = st.contact;
-      children.push(el('div', { class: 'result', 'data-kind': c.associated ? 'not_found' : 'warn' },
-        el('strong', {}, c.associated ? "✓ Contatto creato e associato all'Azienda" : '✓ Contatto creato'),
-        c.associated ? null : el('p', {}, "⚠ Associazione all'Azienda non riuscita"),
+      const created = [
         el('p', {}, c.name),
         el('p', { class: 'hs-id' }, `Record ID ${c.id}`),
         el('p', {}, `Creato il ${time(c.createdAt)}`),
         link(c.url, 'Apri in HubSpot'),
-        c.mock ? el('p', { class: 'mocknote' }, 'Simulazione (MOCK): nessun record creato davvero.') : null));
+        c.mock ? mockNote('Simulazione (MOCK): nessun record creato davvero.') : null,
+      ];
+      children.push(c.associated
+        ? feedback('success', "Contatto creato e associato all'Azienda", ...created)
+        : feedback('warning', "Contatto creato, associazione all'Azienda non riuscita", ...created));
       if (!c.associated) {
-        if (st.contactError) children.push(el('div', { class: 'result', 'data-kind': 'error' }, ...lines(st.contactError)));
+        if (st.contactError) children.push(feedback('error', 'Associazione non riuscita', ...lines(st.contactError)));
         children.push(el('button', { id: 'retry-associate', class: 'btn wide', type: 'button', disabled: Boolean(busy) || !status.ready, onclick: onAssociate },
           busy === 'associate' ? 'Associazione in corso…' : 'Riprova associazione'));
       }
     } else if (st.contactMatches) {
-      children.push(el('div', { class: 'result', 'data-kind': 'found' },
-        el('strong', {}, 'Contatto già presente in HubSpot'),
+      children.push(feedback('blocked', 'Contatto già presente in HubSpot',
         el('p', {}, 'Nessun nuovo contatto creato e nessuna modifica a quello esistente. Se serve, associalo a questa Azienda direttamente in HubSpot.'),
         ...st.contactMatches.map((m) => recordCard(m, 'contact'))));
     } else if (!contactReady(draft)) {
@@ -259,12 +261,14 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
       const { properties, errors } = contactPayload(crmRecords(draft, getOperator(), { sessionLegalBasis: getSessionLegalBasis() }).contact, getOperator(), { legalBasisConfirmed: legalBasis });
       children.push(el('p', { class: 'hint' }, 'Prima della creazione Scout cerca il contatto in HubSpot (email, telefono, cellulare, LinkedIn). Verranno scritti questi dati:'), preview(properties));
       // la base giuridica serve solo a creare il Contatto: la verifica HubSpot resta sempre possibile
-      if (!legalBasis) children.push(el('p', { id: 'legal-basis-required', class: 'result', 'data-kind': 'warn' }, 'Conferma la base giuridica per poter creare il Contatto in HubSpot.'));
-      if (errors.length) children.push(el('div', { class: 'result', 'data-kind': 'warn' }, el('strong', {}, 'Da correggere prima della creazione'), ...errors.map((e) => el('p', {}, e))));
+      if (!legalBasis) {
+        children.push(withId('legal-basis-required', feedback('warning', 'Conferma la base giuridica per poter creare il Contatto in HubSpot.',
+          el('p', {}, 'Spunta la base giuridica nel form Contatto, oppure attivala per tutta la sessione nella Home.'))));
+      }
+      if (errors.length) children.push(feedback('warning', 'Da correggere prima della creazione', ...errors.map((e) => el('p', {}, e))));
       if (st.contactError) {
-        children.push(el('div', { class: 'result', 'data-kind': 'error' },
-          target.existing ? null : el('strong', {}, '✓ Azienda creata'),
-          el('strong', {}, '⚠ Contatto non creato'), ...lines(st.contactError)));
+        if (!target.existing) children.push(feedback('success', 'Azienda creata'));
+        children.push(feedback('warning', 'Contatto non creato', ...lines(st.contactError)));
       }
       const label = st.contactError ? 'Riprova creazione Contatto' : target.existing ? 'Crea Contatto e associa a questa Azienda' : 'Crea Contatto e associa';
       children.push(el('button', { id: 'create-contact', class: 'btn primary wide', type: 'button', disabled: Boolean(busy) || !status.ready || errors.length > 0 || !legalBasis, onclick: onCreateContact },
@@ -281,11 +285,15 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
       ? `Simulazione: nessun dato viene letto o scritto su HubSpot. Scenario: ${MOCK_SCENARIOS[status.mockScenario] || ''}.`
       : 'HubSpot reale: la verifica legge i dati, le creazioni partono solo con un tuo clic. I record esistenti non vengono mai modificati.';
     const blocker = $('#hubspot-blocker');
-    blocker.textContent = status.blocker;
+    blocker.replaceChildren(...(status.blocker ? [feedback('blocked', status.blocker)] : []));
     blocker.hidden = !status.blocker;
     const verify = $('#verify');
     verify.disabled = Boolean(busy) || !status.ready;
     verify.textContent = busy === 'verify' ? 'Verifica in corso…' : 'Verifica HubSpot';
+    verify.setAttribute('aria-busy', String(busy === 'verify'));
+    // una sola azione primaria per stato: dopo la scansione la verifica, poi la creazione
+    const st0 = state();
+    verify.classList.toggle('primary', getDraft().site.pages.length > 0 && !st0.verification && !st0.company);
     if (!getOperator()) {
       // senza commerciale il pannello mostra solo la sua scelta: niente anteprime (servono l'owner)
       for (const id of ['#company-step', '#contact-step']) $(id).hidden = true;
@@ -316,6 +324,8 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
   return {
     render,
     refreshStatus,
+    /** Modalità HubSpot attuale, come la dice il service worker (nessuna copia della configurazione). */
+    get mode() { return status.mode; },
     /** Dati dell'azienda cambiati (correzione a mano, nuova pagina, Svuota): la verifica va rifatta. */
     dataChanged() {
       dataVersion += 1;

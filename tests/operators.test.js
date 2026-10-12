@@ -52,7 +52,9 @@ test('registro dei commerciali: i due commerciali Agria, ID owner unici, un solo
   assert.ok(Object.isFrozen(OPERATORS) && OPERATORS.every(Object.isFrozen), 'non modificabile a runtime');
   // nomi e ID stanno solo nel registro: pannello e Impostazioni li leggono da lì
   const ext = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'extension');
-  const files = fs.readdirSync(ext, { recursive: true }).map(String).filter((f) => /\.(js|html|json|css)$/.test(f));
+  // la copia del Navigatore (un altro repository) cita i commerciali nei suoi testi: non è un registro
+  const files = fs.readdirSync(ext, { recursive: true }).map(String)
+    .filter((f) => /\.(js|html|json|css)$/.test(f) && !f.replace(/\\/g, '/').startsWith('modules/navigator/app/'));
   for (const o of OPERATORS) {
     for (const value of [o.name, o.hubspotOwnerId]) {
       const found = files.filter((f) => fs.readFileSync(path.join(ext, f), 'utf8').includes(value)).map((f) => f.replace(/\\/g, '/'));

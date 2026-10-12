@@ -1,6 +1,7 @@
 // Costruzione degli elementi del pannello. Tutto il testo che arriva dai siti analizzati va a
 // schermo come testo (textContent, value), mai come HTML; i link si creano solo per http/https.
 
+import { el } from '../ui/dom.js';
 import { emailCategory } from '../lib/parser.js';
 import { factsOf, missingForContact, peopleOf } from '../lib/siteData.js';
 import { contactPerson, personLine, rankPeople, suggestedContact } from '../lib/crmModel.js';
@@ -10,21 +11,7 @@ const PAGE_TYPES = {
 };
 const EMAIL_TAGS = { generic: 'aziendale generica', company: 'aziendale', personal: 'personale', pec: 'PEC', system: 'di sistema' };
 
-/** el('p', { class: 'x', text: 'ciao', onclick }, figlio1, figlio2…) */
-export function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === false || v == null) continue;
-    if (k === 'text') node.textContent = v;
-    else if (k === 'onclick') node.addEventListener('click', v);
-    else node.setAttribute(k, v === true ? '' : String(v));
-  }
-  for (const child of children.flat()) {
-    if (child == null || child === false || child === '') continue;
-    node.append(typeof child === 'string' ? document.createTextNode(child) : child);
-  }
-  return node;
-}
+export { el }; // da ../ui/dom.js, condiviso da tutte le pagine
 
 const isWebUrl = (url) => typeof url === 'string' && /^https?:\/\//i.test(url);
 

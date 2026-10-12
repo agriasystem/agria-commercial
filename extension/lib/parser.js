@@ -1,4 +1,4 @@
-// Estrattore di Agria Scout: da una pagina ai dati che contiene, ognuno con la sua prova.
+// Estrattore di Scout (Agria Commercial): da una pagina ai dati che contiene, ognuno con la sua prova.
 //
 // Riceve la "fotografia" della pagina raccolta da content/collector.js (la pagina aperta nel
 // browser oppure una pagina scaricata dalla scansione approfondita) e restituisce:

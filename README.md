@@ -1,7 +1,12 @@
-# Agria Scout
+# Agria Commercial
 
-Estensione Chrome per il prospecting di Agria System. Il commerciale apre il sito ufficiale di
-un prospect, apre Agria Scout nel pannello laterale e preme **Scansione approfondita**: Scout
+Estensione Chrome di Agria System per il lavoro commerciale, in un solo pannello laterale con tre
+moduli: **Scout** (trova, analizza e registra nuovi prospect), **Outreach** (primo contatto e
+follow-up: in arrivo, per ora solo un segnaposto) e **Navigatore** (la guida durante le chiamate,
+aperta in una scheda ampia). Vedi *Moduli e navigazione*.
+
+**Scout.** Il commerciale apre il sito ufficiale di un prospect, apre Agria Commercial nel
+pannello laterale, entra in **Scout** e preme **Scansione approfondita**: Scout
 legge le pagine informative dello stesso sito (Contatti, Chi siamo, Team, pagine legali…) e
 prepara i form **Azienda** e **Contatto** con le proprietà HubSpot di Agria. Ogni valore porta
 con sé la pagina da cui viene, il metodo di rilevazione e l'affidabilità, e si corregge a mano.
@@ -17,16 +22,73 @@ nessuno scraping di Google Maps. HubSpot si usa con le API gratuite del portale 
 |---|---|
 | **Reale** | Scelta del commerciale all'apertura, scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. In modalità **HubSpot reale**: verifica dei doppioni, creazione di una nuova Azienda, creazione del Contatto e associazione all'Azienda (API HubSpot 2026-09). |
 | **MOCK** | Modalità predefinita. Verifica e creazione rispondono in base allo scenario scelto nelle Impostazioni (*Azienda non presente*, *Azienda già presente*, *Errore HubSpot*): nessuna chiamata a HubSpot, nessuna credenziale. Il badge in alto dice sempre **HubSpot MOCK** o **HubSpot REALE**. |
-| **Non presente** | Modifica di aziende o contatti già in HubSpot (solo lettura e visualizzazione), associazione di un contatto già esistente, trattative, task di follow-up, invio email, Gmail, collegamento al Navigatore Chiamata. |
+| **Non presente** | Modifica di aziende o contatti già in HubSpot (solo lettura e visualizzazione), associazione di un contatto già esistente, trattative, task di follow-up, invio email, Gmail (Outreach è un segnaposto: «Outreach sarà disponibile nella prossima fase.»). Il Navigatore non riceve dati da Scout. |
+
+## Moduli e navigazione
+
+Dopo la scelta del commerciale il pannello apre la **Home** («Da dove vuoi partire?»). In alto, sempre:
+«Agria System / AGRIA COMMERCIAL», il badge HubSpot MOCK/REALE, *Impostazioni*, «Commerciale attivo:
+{nome} · **Cambia**» e la navigazione **Home · Scout · Outreach · Navigatore ↗**.
+
+- **Home**: il riquadro **Prossimo passo** (cosa fare ora, calcolato dallo stato di Scout: «Analizza un
+  nuovo prospect», «Verifica {azienda} in HubSpot», «Crea {azienda} in HubSpot», «Controlla il possibile
+  duplicato…», «{azienda} è già presente in HubSpot», «Crea il Contatto per…», «Azienda salvata in
+  HubSpot»), le tre schede dei moduli e la **base giuridica predefinita** della sessione.
+- **Scout**: il lavoro di sempre, identico (scansione, form, persone, HubSpot). Passare alla Home e
+  tornare non perde nulla: la bozza resta una sola, in `chrome.storage.session`.
+- **Outreach**: pulsante disattivato con la spiegazione; la vista dice «Outreach sarà disponibile
+  nella prossima fase.». Nessuna logica di email, Gmail o task.
+- **Navigatore ↗**: si apre in una **nuova scheda** dell'estensione, a tutta larghezza
+  (`modules/navigator/app/navigatore.html`), non dentro il pannello. Il pannello resta dov'era.
+
+Il pannello ricorda solo quale vista era aperta (`shellView` in `chrome.storage.session`); tutto il
+resto ha una sola fonte: bozza e commerciale come prima, la modalità HubSpot dal service worker. Il
+Prossimo passo non ha uno stato suo: si ricalcola ogni volta (`lib/nextStep.js`).
+
+**Regole dell'interfaccia.** Una sola azione primaria per stato (prima *Scansione approfondita*, poi
+*Verifica HubSpot*, poi *Crea Azienda* / *Crea Contatto*). Gli esiti usano un solo componente
+(`ui/feedback.js`) con cinque toni — riuscito ✓, attenzione ⚠, bloccato ⛔, errore ✕, informazione ℹ —
+sempre con icona e titolo, mai solo il colore. Etichette per il commerciale, non codici HubSpot
+(«Lead Status: Da contattare», «Proprietario HubSpot: {nome} · ID …»; il nome tecnico della proprietà
+resta nel suggerimento al passaggio del mouse). Navigazione da tastiera con focus visibile; durante
+un'operazione il pulsante è disattivato (`aria-busy`), quindi niente doppi invii.
+
+## Navigatore: fonte unica e aggiornamento
+
+La **fonte** del Navigatore è il suo repository, `../navigatore-agria-sorgenti/navigatore-agria`, e
+in particolare il file buildato `dist/navigatore-chiamata-agria.html`. Agria Commercial non lo modifica
+e non ha una seconda versione da modificare: in `extension/modules/navigator/app/` c'è una **copia
+generata**, da non toccare a mano.
+
+- Baseline inclusa: commit **7c02185** (scritto in `app/navigatore.source.json` con l'impronta SHA-256
+  del file buildato e di ogni file della copia).
+- Unica trasformazione: Manifest V3 non esegue script inline nelle pagine di un'estensione, quindi i due
+  blocchi `<script>` della pagina diventano `navigatore-1.js` (contenuti) e `navigatore-2.js` (motore),
+  identici carattere per carattere e nello stesso punto. Il resto della pagina è invariato; il
+  Navigatore gira com'è, con il suo `localStorage`.
+- `tests/navigator.test.js` ricompone la pagina e verifica che sia identica byte per byte al file
+  buildato registrato; se il repository del Navigatore è su questo PC controlla anche commit, pulizia
+  del repository e allineamento.
+
+**Aggiornare il Navigatore** (dopo un nuovo commit nel suo repository, con la sua build già fatta e
+committata là):
+
+1. `npm run navigator:check` — dice se la copia è allineata, senza scrivere nulla.
+2. `npm run navigator:sync` — rifà la copia. Si rifiuta se il repository del Navigatore ha modifiche
+   non registrate o se `dist/` non corrisponde ai sorgenti (ricompila i sorgenti in `.tmp/` di questo
+   progetto e confronta: nel repository del Navigatore non scrive mai).
+3. `npm test` e `npm run e2e`, poi un commit qui con il nuovo commit del Navigatore nel messaggio.
+
+Cambi a testi, script o comportamento del Navigatore si fanno solo nel suo repository.
 
 ## Installazione
 
 1. Apri `chrome://extensions` e attiva **Modalità sviluppatore** (in alto a destra).
 2. **Carica estensione non pacchettizzata** e scegli la cartella **`agria-scout/extension`**
    (quella che contiene `manifest.json`).
-3. Fissa Agria Scout nella barra (icona del puzzle → puntina). Un clic sull'icona apre il pannello.
-4. Alla prima apertura il pannello chiede **«Chi sta usando Agria Scout?»**: scegli il tuo nome.
-   Finché non scegli, scansione e Verifica HubSpot non partono.
+3. Fissa Agria Commercial nella barra (icona del puzzle → puntina). Un clic sull'icona apre il pannello.
+4. Alla prima apertura il pannello chiede **«Chi sta usando Agria Commercial?»**: scegli il tuo nome.
+   Finché non scegli, non si vedono né i moduli né la navigazione. Poi si apre la Home.
 5. Per usare HubSpot reale: Impostazioni → **Connessione HubSpot reale** (vedi sotto).
 
 **Commerciali.** L'elenco è nel registro `extension/lib/operators.js`, l'unico punto in cui stanno
@@ -39,7 +101,7 @@ pannello: «Commerciale attivo: {nome} · **Cambia**»; *Cambia* riapre la scelt
 **Impostazioni** (limite pagine della scansione, modalità HubSpot MOCK o reale, scenario MOCK): si
 salvano da sole mentre scrivi («✓ Salvato» accanto al campo), restano in questo browser
 (`chrome.storage.local`, mai sincronizzate) e mostrano i **Commerciali disponibili** con il loro
-Owner ID, in sola lettura. «← Torna ad Agria Scout» chiude la pagina.
+Owner ID, in sola lettura. «← Torna ad Agria Commercial» chiude la pagina.
 
 ## HubSpot reale: Service Key e sicurezza
 
@@ -158,12 +220,13 @@ validazione. Dopo un esito incerto su una creazione (5xx, timeout, rete) Scout n
 chiede una nuova verifica.
 
 **Aggiornare dopo una nuova versione del codice:** in `chrome://extensions` premi ↻ sulla scheda
-di Agria Scout, poi chiudi e riapri il pannello laterale e scegli di nuovo il commerciale. Le
+di Agria Commercial (prima «Agria Scout»), poi chiudi e riapri il pannello laterale e scegli di nuovo il commerciale. Le
 impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo.
 
 ## Uso
 
-1. Apri il sito del prospect (qualunque pagina) e clic sull'icona di Agria Scout.
+1. Apri il sito del prospect (qualunque pagina), clic sull'icona di Agria Commercial e poi **Scout**
+   (navigazione, scheda Scout della Home o «Apri Scout» nel Prossimo passo).
 2. **Scansione approfondita**: avanzamento «Analisi pagina 7 di 23…», si può annullare in ogni
    momento conservando quanto già trovato. Alla fine il riepilogo:
    «24 pagine · 4 email · 3 telefoni · 1 WhatsApp · 2 persone».
@@ -187,7 +250,7 @@ impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo
    fondo, in «Dati legali (non usati in HubSpot)».
 6. La **base giuridica** compare quando il Contatto è valido: si conferma a mano, e va confermata
    di nuovo se cambia la persona o il contatto smette di essere valido. Per non ripeterla a ogni
-   prospect, dopo la scelta del commerciale c'è **«Base giuridica predefinita per i nuovi prospect»**
+   prospect, nella **Home** c'è **«Base giuridica predefinita per i nuovi prospect»**
    (Legitimate interest – prospect/lead) con la casella «Usa questa base giuridica per i nuovi contatti
    prospect in questa sessione»: ogni nuovo Contatto valido la eredita («Predefinita per questa
    sessione») e si può togliere o riconfermare per il singolo contatto. Vale solo per la sessione di
@@ -330,12 +393,19 @@ extension/                 ← la cartella da caricare in Chrome
   lib/hubspotPayload.js          proprietà da scrivere per una nuova Azienda / un nuovo Contatto
   lib/hubspotMessages.js         nomi dei messaggi pannello ↔ service worker
   lib/mockHubspotClient.js       HubSpot simulato con i tre scenari, stessa interfaccia del reale
-  sidepanel/                     pannello laterale (pageReader.js, render.js, hubspotPanel.js, sidepanel.js)
+  lib/nextStep.js                «Prossimo passo» della Home, calcolato dalla bozza (nessuno stato suo)
+  shell/shell.js                 navigazione fra Home, Scout, Outreach; apertura del Navigatore
+  modules/outreach/outreach.js   segnaposto di Outreach (nessuna logica)
+  modules/navigator/navigator.js apre il Navigatore in una nuova scheda
+  modules/navigator/app/         copia GENERATA del Navigatore (tools/sync-navigator.js): non modificare
+  sidepanel/                     pannello laterale: Home, viste dei moduli e Scout (pageReader.js,
+                                 render.js, hubspotPanel.js, sidepanel.js)
   options/                       pagina Impostazioni
   ui/agria.css                   stile Agria condiviso
+  ui/dom.js · ui/feedback.js     costruzione del DOM senza HTML da stringhe; componente degli esiti
   icons/                         generate da tools/make-icons.js
 tests/                     test Node, siti di prova (fixtures), support/fakeHubspot.js (HubSpot finto)
-tools/                     e2e.js (prova nel browser), make-icons.js
+tools/                     e2e.js (prova nel browser), make-icons.js, sync-navigator.js (copia del Navigatore)
 ```
 
 ## Controlli
@@ -344,9 +414,10 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo in ogni stato di Scout (anche MOCK/REALE separati), Home, navigazione, Outreach segnaposto, la shell che ricorda solo la vista. `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo, Outreach disattivato), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
+| `npm run navigator:check` | La copia del Navigatore è allineata al suo repository? (vedi *Navigatore*) |
 
 `npm run e2e` usa Playwright, che **non** è una dipendenza del progetto: si installa al momento
 con `npm i --no-save playwright && npx playwright install chromium`, oppure si indica con
@@ -360,6 +431,10 @@ a HubSpot. Le prove sul portale vero si fanno solo a mano (vedi la procedura nel
 Milestone 2), prima in sola lettura.
 
 ## Limiti noti
+
+- Il Navigatore dentro l'estensione salva i suoi dati nel `localStorage` dell'estensione: è separato da
+  quello del file `navigatore-chiamata-agria.html` aperto con un doppio clic. Sono due archivi distinti.
+- Il Navigatore non riceve ancora dati da Scout (azienda, persona): si compila a mano come sempre.
 
 - Le pagine scaricate dalla scansione si leggono come HTML: i contenuti generati solo da
   JavaScript (alcuni siti Wix o app) non si vedono. La pagina aperta invece si legge com'è a schermo.

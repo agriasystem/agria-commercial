@@ -1,4 +1,4 @@
-// Impostazioni di Agria Scout: commerciali disponibili (solo lettura), limite della scansione,
+// Impostazioni di Agria Commercial: commerciali disponibili (solo lettura), limite della scansione,
 // modalità HubSpot (MOCK o reale), Service Key, scenario MOCK. Ogni scelta si salva da sola, in
 // questo browser: i campi di testo mentre si scrive (dopo una breve pausa) e all'uscita dal campo.
 // Accanto al campo compare «✓ Salvato» per qualche secondo. Il pannello aperto si aggiorna da solo.
@@ -199,7 +199,7 @@ async function onRemoveKey() {
   else setLine('#key-status', res.error.message, 'error');
 }
 
-// «← Torna ad Agria Scout»: il pannello laterale resta nella finestra; si salva ciò che manca e si
+// «← Torna ad Agria Commercial»: il pannello laterale resta nella finestra; si salva ciò che manca e si
 // chiude questa scheda. sidePanel.open va chiamato subito, dentro il clic.
 function backToScout(tab) {
   if (tab?.windowId != null) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});

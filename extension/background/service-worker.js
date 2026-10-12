@@ -1,4 +1,4 @@
-// Service worker di Agria Scout.
+// Service worker di Agria Commercial.
 // - Apre il pannello laterale al clic sull'icona dell'estensione.
 // - È l'unico punto che parla con HubSpot: legge la Service Key, chiama le API e risponde al pannello
 //   e alle Impostazioni con risultati già ripuliti (la chiave non lascia mai il service worker).
@@ -8,7 +8,7 @@ import { createHubspotService, MESSAGE, STATUS_CHANGED } from '../lib/hubspotSer
 // a ogni avvio del service worker, non solo all'installazione: così vale sempre
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((err) => console.error('[Agria Scout] pannello laterale non configurato:', err?.message || err));
+  .catch((err) => console.error('[Agria Commercial] pannello laterale non configurato:', err?.message || err));
 
 const service = createHubspotService({
   local: chrome.storage.local,
