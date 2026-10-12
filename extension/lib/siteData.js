@@ -4,6 +4,7 @@
 // Funzioni pure: restituiscono sempre un oggetto nuovo.
 
 import { normKey } from './validation.js';
+import { METHOD } from './parser.js';
 
 const MAX_SOURCES = 10;
 const MAX_FAILURES = 50;
@@ -121,17 +122,38 @@ function rated(fact) {
   const pages = distinct(fact.sources, (s) => s.url);
   const methods = distinct(fact.sources, (s) => s.method);
   const score = (fact.sources[0]?.score ?? 0) + Math.min(pages - 1, 3) * 0.5;
-  const reliability = fact.sources.some((s) => s.reliability === 'high') || methods >= 2 ? 'high' : 'check';
+  // un'email con del testo attaccato resta da verificare anche se compare in più punti
+  const reliability = !(fact.kind === 'email' && onlyGlued(fact))
+    && (fact.sources.some((s) => s.reliability === 'high') || methods >= 2) ? 'high' : 'check';
   return { ...fact, score, reliability, best: fact.sources[0] || null, pages };
+}
+
+// fonti che danno l'email da sola, senza testo intorno che le si possa attaccare
+const EXACT_EMAIL_METHODS = new Set([METHOD.jsonld, METHOD.microdata, METHOD.metaBusiness, METHOD.mailto]);
+const exactSource = (fact) => fact.sources.some((s) => EXACT_EMAIL_METHODS.has(s.method));
+
+// trovata solo con del testo attaccato davanti (vedi parser: gluedPrefixes), mai da sola
+const onlyGlued = (fact) => Boolean(fact.extra.gluedPrefixes?.length) && !exactSource(fact);
+
+// "4363917agriturismolamora@gmail.com" accanto a "agriturismolamora@gmail.com": il prefisso viene dal
+// testo vicino (le ultime cifre del telefono) e l'email pulita ha una fonte più affidabile (link
+// email, JSON-LD, campo strutturato, oppure scritta da sola nel testo) → si scarta.
+// Un'email che inizia davvero con delle cifre resta, se non ha una copia pulita più affidabile.
+function isGluedCopy(fact, emails) {
+  if (!onlyGlued(fact)) return false;
+  return emails.some((clean) => clean !== fact
+    && fact.extra.gluedPrefixes.some((p) => p + clean.value === fact.value)
+    && (exactSource(clean) || !clean.extra.gluedPrefixes?.length));
 }
 
 /** Valori di un tipo (email, phone, …) dal più probabile, con affidabilità e fonte migliore. */
 export function factsOf(site, kind) {
   // a parità di punteggio vince il primo trovato (l'ordine di inserimento resta: sort è stabile)
-  return Object.values(site.facts)
+  const facts = Object.values(site.facts)
     .filter((f) => f.kind === kind)
     .map(rated)
     .sort((a, b) => b.score - a.score);
+  return kind === 'email' ? facts.filter((f) => !isGluedCopy(f, facts)) : facts;
 }
 
 /** Contatto HubSpot possibile: nome + cognome + almeno un recapito tra email, telefono, LinkedIn. */

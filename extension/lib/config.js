@@ -1,6 +1,8 @@
 // Impostazioni di Agria Scout, salvate in chrome.storage.local di questo browser.
 // Nessuna credenziale: nella V0/V1 HubSpot è soltanto simulato. Il proprietario HubSpot è il
 // commerciale che usa il browser, scritto a mano (nome e ID owner), mai dedotto dal sito.
+// Ogni installazione è un commerciale: niente chrome.storage.sync, nessuna condivisione tra
+// browser o utenti.
 
 export const MOCK_SCENARIOS = Object.freeze({
   not_found: 'Azienda non presente',
@@ -36,6 +38,31 @@ export function normalizeConfig(raw) {
       maxPages: Number.isInteger(maxPages) && maxPages >= SCAN_LIMITS.min && maxPages <= SCAN_LIMITS.max ? maxPages : SCAN_LIMITS.default,
     },
   };
+}
+
+/**
+ * Un valore cambiato nella pagina Impostazioni → { config, error }. Un valore sbagliato non si
+ * salva: resta la configurazione di prima e si spiega perché.
+ */
+export function applySetting(config, name, value) {
+  const next = normalizeConfig(config);
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (name === 'ownerId') {
+    if (v && !/^\d{1,20}$/.test(v)) return { config: next, error: "L'ID owner HubSpot contiene solo cifre." };
+    next.hubspot.ownerId = v;
+  } else if (name === 'ownerName') {
+    next.hubspot.ownerName = v;
+  } else if (name === 'maxPages') {
+    const n = Number(v);
+    if (!v || !Number.isInteger(n) || n < SCAN_LIMITS.min || n > SCAN_LIMITS.max) return { config: next, error: `Scegli un numero da ${SCAN_LIMITS.min} a ${SCAN_LIMITS.max}.` };
+    next.scan.maxPages = n;
+  } else if (name === 'mockScenario') {
+    if (!Object.hasOwn(MOCK_SCENARIOS, v)) return { config: next, error: 'Scenario non previsto.' };
+    next.hubspot.mockScenario = v;
+  } else {
+    return { config: next, error: 'Impostazione sconosciuta.' };
+  }
+  return { config: normalizeConfig(next), error: '' };
 }
 
 export async function loadConfig(storage = chrome.storage.local) {

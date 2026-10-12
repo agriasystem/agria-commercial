@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_CONFIG, loadConfig, MOCK_SCENARIOS, normalizeConfig, saveConfig } from '../extension/lib/config.js';
+import { applySetting, DEFAULT_CONFIG, loadConfig, MOCK_SCENARIOS, normalizeConfig, saveConfig } from '../extension/lib/config.js';
 import { createHubspotClient, HubspotError, validateCompanyQuery } from '../extension/lib/hubspotClient.js';
 import { createMockHubspotClient } from '../extension/lib/mockHubspotClient.js';
 
@@ -30,6 +30,34 @@ test('configurazione: proprietario HubSpot e limite della scansione', () => {
   assert.equal(normalizeConfig({ scan: { maxPages: 1000 } }).scan.maxPages, 30);
   assert.equal(normalizeConfig({ scan: { maxPages: 2 } }).scan.maxPages, 30);
   assert.equal(normalizeConfig(undefined).scan.maxPages, 30);
+});
+
+test('impostazioni: salvataggio automatico di ogni campo, valori sbagliati non salvati', async () => {
+  const storage = memoryStorage();
+  // come fa la pagina Impostazioni: un campo alla volta, letto e salvato subito
+  const autosave = async (name, value) => {
+    const { config, error } = applySetting(await loadConfig(storage), name, value);
+    if (!error) await saveConfig(config, storage);
+    return error;
+  };
+  assert.equal(await autosave('ownerName', '  Matteo Garuzzo '), '');
+  assert.equal(await autosave('ownerId', '123456789'), '');
+  assert.equal(await autosave('maxPages', '40'), '');
+  assert.equal(await autosave('mockScenario', 'found'), '');
+  assert.deepEqual((await loadConfig(storage)).hubspot, { ...DEFAULT_CONFIG.hubspot, ownerName: 'Matteo Garuzzo', ownerId: '123456789', mockScenario: 'found' });
+  assert.equal((await loadConfig(storage)).scan.maxPages, 40);
+  // un valore sbagliato spiega il motivo e lascia il valore salvato prima
+  assert.match(await autosave('ownerId', '12ab'), /solo cifre/);
+  assert.match(await autosave('maxPages', '500'), /da 5 a 100/);
+  assert.ok(await autosave('mockScenario', 'real'));
+  assert.ok(await autosave('token', 'segreto'), 'nessun campo estraneo');
+  const after = await loadConfig(storage);
+  assert.equal(after.hubspot.ownerId, '123456789');
+  assert.equal(after.scan.maxPages, 40);
+  assert.equal(after.hubspot.mockScenario, 'found');
+  // svuotare nome e ID è permesso (nuovo commerciale sullo stesso browser)
+  assert.equal(await autosave('ownerId', ''), '');
+  assert.equal((await loadConfig(storage)).hubspot.ownerId, '');
 });
 
 test('configurazione: salvataggio e lettura', async () => {

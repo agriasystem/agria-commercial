@@ -190,46 +190,40 @@ test('settore e tipo di struttura: proposti dalle parole del sito, mai inventati
   assert.equal(cantina.tipo_struttura_hospitality.value, '', 'il tipo di struttura vale solo per Hospitality');
 });
 
-test('contesto rapido: solo dati rilevati senza campo dedicato, nella struttura concordata', () => {
+test('contesto rapido: informazioni operative senza campo dedicato, nell\'ordine concordato, senza dati societari', () => {
   const site = siteOf(HOME, CHI_SIAMO, CONTATTI, PRIVACY);
   const company = values(proposeCompany(site, CONFIG));
   const contact = values(proposeContact(site, CONFIG).fields);
   const text = buildQuickContext(site, company, contact);
   assert.equal(text, [
-    'DATI AGGIUNTIVI RILEVATI DAL SITO',
+    'WHATSAPP',
+    '+39 333 123 4567',
+    '+39 347 111 2223',
     '',
-    'WhatsApp:',
-    '- +39 333 123 4567',
-    '- +39 347 111 2223',
+    'P.IVA',
+    '01234567897',
     '',
-    'Telefoni aggiuntivi:',
-    '- Fax +39 0758123457',
-    '',
-    'Dati societari:',
-    '- Ragione sociale: La Mora Società Agricola S.r.l.',
-    '- P.IVA: 01234567897',
-    '- Codice fiscale: RSSMRA85T10A562S',
-    '- REA: PG-123456',
-    '- CIN: IT054001C2ABCDEFGH',
-    '- PEC: lamora@pec.it',
-    '- Codice SDI: M5UXCR1',
-    '- Sede legale: Via Roma 1, 06123 Perugia (PG)',
-    '',
-    'Persone rilevate:',
+    'POTENZIALI CONTATTI',
     '- Maria Bianchi — Titolare',
-    '- Paolo — Host [dato parziale]',
+    '- Paolo — Host (cognome non trovato)',
     '- Giulia Rossi — Chef',
     '',
-    'Social aggiuntivi:',
+    'ALTRI CANALI',
     '- Instagram: https://www.instagram.com/lamora.agriturismo/',
     '- Facebook: https://www.facebook.com/agriturismolamora',
+    '- Fax: +39 0758123457',
+    '- PEC: lamora@pec.it',
     '',
-    'Altre informazioni utili:',
-    '- Indirizzo: Via delle Querce 14, 06081 Assisi (PG)',
+    'ALTRE INFORMAZIONI COMMERCIALI UTILI',
     '- Booking engine: Octorate',
     '- Portale: Booking.com',
-    '- CMS: WordPress',
   ].join('\n'));
   assert.ok(!text.includes('info@lamora.it') && !text.includes('prenotazioni@'), 'le email già nei campi non si ripetono');
+  for (const legal of ['Società Agricola', 'S.r.l.', 'RSSMRA85T10A562S', 'PG-123456', 'IT054001C2ABCDEFGH', 'M5UXCR1', 'Sede legale', 'WordPress']) {
+    assert.ok(!text.includes(legal), `niente dati societari né CMS: ${legal}`);
+  }
+  // email oltre principale e secondaria; telefoni diversi dal principale e dal WhatsApp
+  const more = buildQuickContext(site, { ...company, email_aziendale_secondaria: '' }, contact);
+  assert.match(more, /ULTERIORI EMAIL\n- prenotazioni@lamora\.it/);
   assert.equal(buildQuickContext(emptySite()), '', 'niente dati, niente contesto');
 });

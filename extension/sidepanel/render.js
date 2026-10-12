@@ -3,11 +3,12 @@
 
 import { emailCategory } from '../lib/parser.js';
 import { factsOf, missingForContact, peopleOf } from '../lib/siteData.js';
+import { contactPerson, personLine } from '../lib/crmModel.js';
 
 const PAGE_TYPES = {
   home: 'home', contact: 'contatti', about: 'chi siamo', team: 'team', legal: 'legale', hospitality: 'struttura', blog: 'blog', other: 'pagina',
 };
-const EMAIL_TAGS = { generic: 'generica', personal: 'personale', pec: 'PEC', system: 'di sistema' };
+const EMAIL_TAGS = { generic: 'aziendale generica', company: 'aziendale', personal: 'personale', pec: 'PEC', system: 'di sistema' };
 
 /** el('p', { class: 'x', text: 'ciao', onclick }, figlio1, figlio2…) */
 export function el(tag, attrs = {}, ...children) {
@@ -87,14 +88,13 @@ export function alternatives(values, onPick, max = 6) {
 
 /** Stato del Contatto rispetto alla regola: nome + cognome + email, telefono o LinkedIn. */
 export function contactReadiness(contact) {
-  const v = (name) => contact[name].value.trim();
-  const person = { firstName: v('firstname'), lastName: v('lastname'), email: v('email'), phone: v('phone'), mobile: v('mobilephone'), linkedin: v('hs_linkedin_url') };
+  const person = contactPerson(Object.fromEntries(Object.entries(contact).map(([k, f]) => [k, f.value])));
   if (!Object.values(person).some(Boolean)) {
     return { ready: false, text: 'Nessun contatto: scegli una persona tra quelle rilevate o compila i campi a mano.' };
   }
   const missing = missingForContact(person);
   return missing.length
-    ? { ready: false, text: `Contatto incompleto: manca ${missing.join(' e ')}.` }
+    ? { ready: false, text: `Contatto incompleto: manca ${missing.join(' e ')}. La base giuridica si conferma quando il contatto è completo.` }
     : { ready: true, text: 'Contatto completo: nome, cognome e almeno un recapito.' };
 }
 
@@ -110,13 +110,17 @@ export function peopleCards(site, mainKey, onUse) {
     ].filter(Boolean);
     const main = p.key === mainKey;
     const missing = missingForContact(p);
-    return el('article', { class: `person${main ? ' main' : ''}` },
+    // persona parziale: si mostra, ma non diventa Contatto da sola (il cognome non si inventa)
+    const status = p.partial
+      ? [el('p', { class: 'person-tags' }, el('span', { class: 'chip check' }, 'Persona parziale')), el('p', { class: 'person-warn' }, 'Cognome non trovato')]
+      : [missing.length ? el('p', { class: 'person-warn' }, `Non utilizzabile come Contatto HubSpot: manca ${missing.join(' e ')}.`) : null];
+    return el('article', { class: `person${main ? ' main' : ''}${p.partial ? ' partial' : ''}` },
       el('div', { class: 'person-head' },
-        el('span', { class: 'n' }, name, p.role ? ` — ${p.role}` : '', p.lastName ? '' : ' — cognome non trovato'),
+        el('span', { class: 'n' }, name, p.role ? ` — ${p.role}` : ''),
         badge(p.reliability)),
+      ...status,
       contacts.length ? el('p', { class: 'person-contacts' }, ...contacts.map(([k, v]) => el('span', {}, `${k} ${v}`))) : null,
       isWebUrl(p.linkedin) ? el('p', { class: 'person-contacts' }, el('a', { href: p.linkedin, target: '_blank', rel: 'noopener noreferrer' }, 'Profilo LinkedIn')) : null,
-      missing.length ? el('p', { class: 'person-warn' }, `Non utilizzabile come Contatto HubSpot: manca ${missing.join(' e ')}.`) : null,
       el('p', { class: 'person-src' },
         'Fonte: ', ...sourceLinks(p.sources, 3),
         p.sources[0]?.evidence ? el('span', { class: 'ev' }, `“${p.sources[0].evidence}”`) : null),
@@ -126,42 +130,66 @@ export function peopleCards(site, mainKey, onUse) {
   });
 }
 
+// Ordine per importanza commerciale; i dati legali (non usati in HubSpot) in fondo, chiusi
 const GROUPS = [
-  ['Email', 'email', (f) => EMAIL_TAGS[emailCategory(f.value, f.extra)]],
-  ['Telefoni', 'phone', (f) => (f.extra.mobile ? 'cellulare' : 'fisso')],
-  ['WhatsApp', 'whatsapp'],
+  ['Email', 'email', { open: true }],
+  ['Telefoni', 'phone', { open: true, tag: (f) => (f.extra.mobile ? 'cellulare' : 'fisso') }],
+  ['WhatsApp', 'whatsapp', { open: true }],
+  ['Persone', 'people'],
+  ['Indirizzi', 'address', { tag: (f) => (f.extra.legalSeat ? 'sede legale' : '') }],
+  ['Social', 'social', { tag: (f) => f.extra.network }],
+  ['P.IVA', 'piva', { tag: (f) => (f.extra.invalid ? 'cifra di controllo non valida' : '') }],
   ['Fax', 'fax'],
-  ['Indirizzi', 'address', (f) => (f.extra.legalSeat ? 'sede legale' : '')],
   ['Nomi commerciali', 'name'],
-  ['Ragione sociale', 'legalName'],
-  ['P.IVA', 'piva', (f) => (f.extra.invalid ? 'cifra di controllo non valida' : '')],
-  ['Codice fiscale', 'cf', (f) => (f.extra.invalid ? 'controllo non superato' : '')],
-  ['REA', 'rea'],
-  ['CIN', 'cin'],
-  ['Codice SDI', 'sdi'],
-  ['Social', 'social', (f) => f.extra.network],
   ['Profili LinkedIn personali', 'linkedinProfile'],
-  ['Sistemi esterni', 'system', (f) => f.extra.category],
+  ['Sistemi esterni', 'system', { tag: (f) => f.extra.category }],
+  ['Dati legali (non usati in HubSpot)', 'legal'],
 ];
+const LEGAL_KINDS = [
+  ['legalName', 'ragione sociale'],
+  ['cf', 'codice fiscale', (f) => (f.extra.invalid ? 'controllo non superato' : '')],
+  ['rea', 'REA'],
+  ['cin', 'CIN'],
+  ['sdi', 'codice SDI'],
+];
+
+function factItem(f, tags) {
+  return el('li', {},
+    el('div', { class: 'fact-head' },
+      isWebUrl(f.value) ? el('a', { class: 'v', href: f.value, target: '_blank', rel: 'noopener noreferrer' }, f.value) : el('span', { class: 'v' }, f.value),
+      ...tags.filter(Boolean).map((t) => el('span', { class: 'chip' }, t)),
+      badge(f.reliability)),
+    el('div', { class: 'fact-src' },
+      'Fonte: ', ...sourceLinks(f.sources, 4),
+      f.best?.method ? ` · ${f.best.method}` : ''));
+}
+
+function groupItems(site, kind, tag) {
+  if (kind === 'people') {
+    return peopleOf(site).map((p) => factItem(
+      { value: personLine(p), reliability: p.reliability, sources: p.sources, best: p.sources[0] },
+      [p.partial ? 'persona parziale' : '', p.eligible ? 'contatto possibile' : ''],
+    ));
+  }
+  if (kind === 'legal') {
+    return LEGAL_KINDS.flatMap(([k, label, flag]) => factsOf(site, k).map((f) => factItem(f, [label, flag?.(f)])));
+  }
+  if (kind === 'email') {
+    // un'email assegnata a una persona rilevata è personale, qualunque forma abbia
+    const own = new Set(peopleOf(site).map((p) => p.email).filter(Boolean));
+    return factsOf(site, kind).map((f) => factItem(f, [own.has(f.value) ? 'personale' : EMAIL_TAGS[emailCategory(f.value, f.extra)]]));
+  }
+  return factsOf(site, kind).map((f) => factItem(f, [tag?.(f)]));
+}
 
 /** Sezione "Tutti i dati rilevati": ogni valore con affidabilità e fonti cliccabili. */
 export function allDataGroups(site) {
-  const groups = GROUPS.map(([title, kind, tagOf]) => {
-    const facts = factsOf(site, kind);
-    if (!facts.length) return null;
-    return el('details', { class: 'group', open: ['email', 'phone', 'whatsapp', 'piva', 'legalName'].includes(kind) },
-      el('summary', {}, `${title} `, el('span', { class: 'count' }, String(facts.length))),
-      el('ul', { class: 'facts' }, ...facts.map((f) => {
-        const tag = tagOf?.(f);
-        return el('li', {},
-          el('div', { class: 'fact-head' },
-            isWebUrl(f.value) ? el('a', { class: 'v', href: f.value, target: '_blank', rel: 'noopener noreferrer' }, f.value) : el('span', { class: 'v' }, f.value),
-            tag ? el('span', { class: 'chip' }, tag) : null,
-            badge(f.reliability)),
-          el('div', { class: 'fact-src' },
-            'Fonte: ', ...sourceLinks(f.sources, 4),
-            ` · ${f.best?.method || ''}`));
-      })));
+  const groups = GROUPS.map(([title, kind, { open = false, tag } = {}]) => {
+    const items = groupItems(site, kind, tag);
+    if (!items.length) return null;
+    return el('details', { class: `group${kind === 'legal' ? ' legal' : ''}`, open },
+      el('summary', {}, `${title} `, el('span', { class: 'count' }, String(items.length))),
+      el('ul', { class: 'facts' }, ...items));
   }).filter(Boolean);
   return groups.length ? groups : [el('p', { class: 'hint' }, 'Ancora nessun dato: avvia una scansione.')];
 }

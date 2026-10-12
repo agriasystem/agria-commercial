@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSnapshot } from '../extension/lib/parser.js';
 import {
-  applyFindings, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
+  applyFindings, contactReady, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
   restoreDraft, setLegalBasisConfirmed, usePerson,
 } from '../extension/lib/draft.js';
 import { LEGAL_BASIS } from '../extension/lib/crmModel.js';
@@ -114,9 +114,8 @@ test('contesto rapido: si aggiorna con i dati, resta se modificato a mano, si ri
   let { draft } = apply(emptyDraft(), HOME);
   draft = apply(draft, CONTATTI).draft;
   const quick = draft.company.hs_quick_context.value;
-  assert.match(quick, /^DATI AGGIUNTIVI RILEVATI DAL SITO/);
-  assert.match(quick, /Maria Bianchi — Titolare/);
-  assert.match(quick, /Telefoni aggiuntivi:\n- \+39 0758123456/);
+  assert.match(quick, /^ULTERIORI TELEFONI\n- \+39 0758123456/, 'il numero della home, diverso dal telefono principale');
+  assert.match(quick, /POTENZIALI CONTATTI\n- Maria Bianchi — Titolare/);
 
   draft = editField(draft, 'company', 'hs_quick_context', 'Nota mia');
   draft = apply(draft, HOME).draft;
@@ -125,11 +124,27 @@ test('contesto rapido: si aggiorna con i dati, resta se modificato a mano, si ri
   assert.equal(draft.company.hs_quick_context.value, quick);
 });
 
-test('base giuridica: suggerita, confermata solo dal commerciale', () => {
+test('base giuridica: suggerita, confermata solo dal commerciale e solo per un contatto valido', () => {
   let { draft } = apply(emptyDraft(), HOME);
+  assert.equal(contactReady(draft), false);
+  assert.equal(setLegalBasisConfirmed(draft, true).legalBasisConfirmed, false, 'senza un contatto valido non si conferma');
+  // contatto compilato a mano: nome, cognome e un recapito
+  draft = editField(draft, 'contact', 'firstname', 'Anna');
+  draft = editField(draft, 'contact', 'lastname', 'Neri');
+  assert.equal(setLegalBasisConfirmed(draft, true).legalBasisConfirmed, false, 'manca ancora un recapito');
+  draft = editField(draft, 'contact', 'email', 'anna.neri@lamora.it');
+  assert.equal(contactReady(draft), true);
   draft = setLegalBasisConfirmed(draft, true);
   assert.equal(draft.legalBasisConfirmed, true);
   assert.equal(setLegalBasisConfirmed(draft, 'sì').legalBasisConfirmed, false);
+  // il contatto smette di essere valido: la conferma decade
+  assert.equal(editField(draft, 'contact', 'email', '').legalBasisConfirmed, false);
+
+  // cambio di persona: la conferma valeva per quella di prima
+  let other = apply(apply(emptyDraft(), CONTATTI).draft, page('https://www.lamora.it/team', 'Giorgio Neri – Fondatore · giorgio.neri@lamora.it\nSara Blu – Chef · sara.blu@lamora.it', [], 'team')).draft;
+  other = setLegalBasisConfirmed(other, true);
+  assert.equal(other.legalBasisConfirmed, true);
+  assert.equal(usePerson(other, 'sarablu', CONFIG).legalBasisConfirmed, false);
 });
 
 test('proprietario: cambia con le Impostazioni, non viene dal sito', () => {

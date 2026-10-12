@@ -4,8 +4,12 @@
 //
 // Regole: un campo corretto a mano non viene mai sovrascritto; i campi non toccati si
 // ricalcolano dai dati di TUTTE le pagine analizzate; un sito diverso è un nuovo prospect.
+// La base giuridica si conferma solo per un Contatto valido, e va confermata di nuovo se il
+// contatto cambia persona o smette di essere valido.
 
-import { buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, proposeCompany, proposeContact } from './crmModel.js';
+import {
+  buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, isContactReady, proposeCompany, proposeContact, proposeStructureFor,
+} from './crmModel.js';
 import { addFailure, addPageFindings, emptySite } from './siteData.js';
 
 export const DRAFT_VERSION = 2;
@@ -48,17 +52,26 @@ function updateQuickContext(draft) {
   Object.assign(field, { value, reliability: '', method: value ? 'generato dai dati rilevati' : '', url: '', evidence: '', alternatives: [] });
 }
 
+/** Il Contatto rispetta la regola HubSpot: nome + cognome + almeno uno tra email, telefono e LinkedIn. */
+export const contactReady = (draft) => isContactReady(valuesOf(draft.contact));
+
+function syncLegalBasis(draft) {
+  if (!contactReady(draft)) draft.legalBasisConfirmed = false;
+}
+
 /** Ricalcola le proposte dai dati del sito (e dalle Impostazioni per il proprietario). */
 export function refreshForms(draft, config) {
   const next = structuredClone(draft);
   const fixed = {};
   for (const prop of EMAIL_PROPS) if (next.company[prop].edited && next.company[prop].value) fixed[prop] = next.company[prop].value;
+  if (next.company.settore_agria.edited) fixed.settore_agria = next.company.settore_agria.value;
   const company = proposeCompany(next.site, config, { fixed });
   for (const { name } of COMPANY_PROPS) if (name !== 'hs_quick_context') mergeField(next.company[name], company[name]);
   const { fields, mainKey } = proposeContact(next.site, config, next.mainPersonChosen ? next.mainPerson : null);
   next.mainPerson = mainKey;
   for (const { name } of CONTACT_PROPS) mergeField(next.contact[name], fields[name]);
   updateQuickContext(next);
+  syncLegalBasis(next);
   return next;
 }
 
@@ -79,7 +92,10 @@ export function recordFailure(draft, failure) {
 export function editField(draft, section, name, value) {
   const next = structuredClone(draft);
   Object.assign(next[section][name], { value: typeof value === 'string' ? value : '', edited: true });
+  // il tipo di struttura vale solo per l'Hospitality: si ripropone quando cambia il settore
+  if (section === 'company' && name === 'settore_agria') mergeField(next.company.tipo_struttura_hospitality, proposeStructureFor(next.site, next.company.settore_agria.value));
   if (!(section === 'company' && name === 'hs_quick_context')) updateQuickContext(next);
+  syncLegalBasis(next);
   return next;
 }
 
@@ -91,6 +107,7 @@ export function pickAlternative(draft, section, name, value) {
   field.alternatives = unique([field.value, ...field.alternatives.filter((a) => a !== value)]).slice(0, MAX_ALTERNATIVES);
   Object.assign(field, { value, edited: true });
   updateQuickContext(next);
+  syncLegalBasis(next);
   return next;
 }
 
@@ -98,14 +115,17 @@ export function pickAlternative(draft, section, name, value) {
 export function usePerson(draft, key, config) {
   if (!draft.site.people[key]) return draft;
   const next = structuredClone(draft);
+  // la conferma della base giuridica valeva per la persona di prima
+  if (next.mainPerson !== key) next.legalBasisConfirmed = false;
   next.mainPerson = key;
   next.mainPersonChosen = true;
   for (const field of Object.values(next.contact)) field.edited = false;
   return refreshForms(next, config);
 }
 
+/** Conferma della base giuridica: possibile solo per un Contatto valido. */
 export function setLegalBasisConfirmed(draft, confirmed) {
-  return { ...structuredClone(draft), legalBasisConfirmed: confirmed === true };
+  return { ...structuredClone(draft), legalBasisConfirmed: confirmed === true && contactReady(draft) };
 }
 
 /** Rigenera il contesto rapido, scartando le modifiche a mano. */
@@ -141,7 +161,7 @@ export function restoreDraft(raw) {
     }
     draft.mainPerson = typeof raw.mainPerson === 'string' && draft.site.people[raw.mainPerson] ? raw.mainPerson : null;
     draft.mainPersonChosen = raw.mainPersonChosen === true && Boolean(draft.mainPerson);
-    draft.legalBasisConfirmed = raw.legalBasisConfirmed === true;
+    draft.legalBasisConfirmed = raw.legalBasisConfirmed === true && contactReady(draft);
     return draft;
   } catch {
     return emptyDraft();

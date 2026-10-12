@@ -12,21 +12,23 @@
 <header class="top">
   <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
   <span class="badge mock">HubSpot MOCK</span>
+  <button id="back" class="tbtn" type="button">← Torna ad Agria Scout</button>
 </header>
 
 <main class="wrap narrow">
   <h2 class="page-title">Impostazioni</h2>
+  <p id="autosave" class="autosave">Impostazioni salvate automaticamente in questo browser. Valgono solo per questa installazione: ogni commerciale ha le sue, non si condividono con altri browser o utenti.</p>
   <form id="settings" class="stack" novalidate>
     <section class="card" aria-labelledby="owner-title">
       <h3 id="owner-title" class="eyebrow">Proprietario HubSpot</h3>
       <p class="hint">Il commerciale che usa questo browser: diventa <code>hubspot_owner_id</code> di Azienda e Contatto. Non viene mai dedotto dal sito.</p>
       <div class="fields">
         <div class="field">
-          <label for="owner-name">Nome del commerciale</label>
+          <label for="owner-name">Nome del commerciale <span class="saved-flag" data-saved-for="ownerName" role="status" hidden>✓ Salvato</span></label>
           <input id="owner-name" name="ownerName" type="text" autocomplete="name" maxlength="80">
         </div>
         <div class="field">
-          <label for="owner-id">ID owner HubSpot <code>hubspot_owner_id</code></label>
+          <label for="owner-id">ID owner HubSpot <code>hubspot_owner_id</code> <span class="saved-flag" data-saved-for="ownerId" role="status" hidden>✓ Salvato</span></label>
           <input id="owner-id" name="ownerId" type="text" inputmode="numeric" maxlength="20" aria-describedby="owner-id-hint">
           <div id="owner-id-hint" class="meta">Solo cifre. In HubSpot: Impostazioni → Utenti e team, oppure chiedilo all'amministratore.</div>
         </div>
@@ -36,7 +38,7 @@
     <section class="card" aria-labelledby="scan-title">
       <h3 id="scan-title" class="eyebrow">Scansione approfondita</h3>
       <div class="field">
-        <label for="max-pages">Numero massimo di pagine per sito</label>
+        <label for="max-pages">Numero massimo di pagine per sito <span class="saved-flag" data-saved-for="maxPages" role="status" hidden>✓ Salvato</span></label>
         <input id="max-pages" name="maxPages" type="number" min="5" max="100" step="1" aria-describedby="max-pages-hint">
         <div id="max-pages-hint" class="meta">Da 5 a 100, consigliato 30. Le pagine si leggono una alla volta: Contatti, Chi siamo, Team e pagine legali per prime.</div>
       </div>
@@ -52,7 +54,7 @@
     </section>
 
     <section class="card" aria-labelledby="scenario-title">
-      <h3 id="scenario-title" class="eyebrow">Scenario simulato</h3>
+      <h3 id="scenario-title" class="eyebrow">Scenario simulato <span class="saved-flag" data-saved-for="mockScenario" role="status" hidden>✓ Salvato</span></h3>
       <p class="hint">Cosa risponde «Verifica HubSpot» finché la modalità è MOCK.</p>
       <fieldset class="choices">
         <legend class="sr">Scenario MOCK</legend>
@@ -69,7 +71,7 @@
       <ul class="plain">
         <li>Agria Scout legge le pagine solo quando premi «Scansione approfondita» o «Analizza solo questa pagina», e non le modifica.</li>
         <li>La scansione scarica soltanto pagine pubbliche dello stesso sito, una alla volta, senza cookie e senza inviare dati.</li>
-        <li>I dati trovati restano in questo browser: nessun server, nessun servizio a pagamento.</li>
+        <li>I dati trovati e queste impostazioni restano in questo browser: nessun server, nessun servizio a pagamento, nessuna sincronizzazione.</li>
         <li>In questa versione non c'è alcuna connessione a HubSpot e non serve nessuna credenziale.</li>
       </ul>
     </section>

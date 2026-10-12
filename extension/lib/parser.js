@@ -339,7 +339,16 @@ function collectNames(ctx, add) {
 // ---------------------------------------------------------------------------------------------
 // email
 
-const GENERIC_LOCAL = /^(info|informazioni|contatti|contatto|contact|contacts|hello|ciao|commerciale|sales|vendite|vendita|amministrazione|admin|segreteria|ufficio|office|booking|prenotazioni|prenota|reception|ordini|orders|shop|negozio|export|marketing|mail|posta|direzione|accoglienza|eventi|enoteca|wine|staff|agriturismo|cantina|hotel|welcome|support|assistenza|servizioclienti|customercare|ristorante|spa|frontoffice|events)$/;
+// alias funzionali: caselle dell'azienda (info@, visit@, booking@…), mai la prova che esista una persona
+const FUNCTIONAL_ALIASES = new Set([
+  'info', 'informazioni', 'contatti', 'contatto', 'contact', 'contacts', 'hello', 'ciao', 'visit', 'visits', 'visite',
+  'booking', 'book', 'prenotazioni', 'prenotazione', 'prenota', 'reservation', 'reservations', 'reception',
+  'receptionist', 'frontoffice', 'accoglienza', 'welcome', 'hospitality', 'sales', 'vendite', 'vendita', 'commerciale',
+  'export', 'ordini', 'orders', 'shop', 'store', 'negozio', 'enoteca', 'degustazioni', 'amministrazione',
+  'administration', 'admin', 'office', 'ufficio', 'segreteria', 'direzione', 'marketing', 'eventi', 'events', 'staff',
+  'support', 'assistenza', 'servizioclienti', 'customercare', 'mail', 'posta', 'agriturismo', 'cantina', 'hotel',
+  'ristorante', 'spa', 'wine',
+]);
 const MAIN_LOCAL = /^(info|contatti|contact|hello)$/;
 const SYSTEM_LOCAL = /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|webmaster|privacy|dpo|gdpr|abuse)/;
 const IGNORED_EMAIL_DOMAINS = /(^|\.)(example\.(com|org|net|it)|esempio\.it|domain\.(com|it)|dominio\.it|tuodominio\.it|yourdomain\.com|email\.com|sentry\.io|wixpress\.com|test\.com)$/;
@@ -347,12 +356,49 @@ const EMAIL_IN_TEXT = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}/gi;
 
 export const isPec = (local, host) => /(^|\.)(pec|legalmail|arubapec|postacert|pecmail|cert)\./.test(host) || /(^|[._-])pec([._-]|$)/.test(local);
 
-/** Tipo di email: 'pec' | 'system' | 'generic' | 'personal'. */
+// "info.cantina", "booking2": basta una parte che sia un alias funzionale
+const isFunctionalLocal = (local) => local.split(/[._+-]+|\d+/).some((part) => FUNCTIONAL_ALIASES.has(part));
+
+// forma da casella personale: nome@, nome.cognome@, iniziale.cognome@, cognome.nome@
+function hasPersonalShape(local) {
+  const parts = local.split(/[._-]+/).map((p) => p.replace(/\d+$/, '')).filter(Boolean);
+  if (!parts.length || !parts.every((p) => /^[a-z]+$/.test(p))) return false;
+  if (parts.length === 1) return FIRST_NAMES.has(parts[0]);
+  if (parts.length !== 2) return false;
+  const [a, b] = parts;
+  return (FIRST_NAMES.has(a) && b.length >= 2) || (a.length === 1 && b.length >= 3) || (FIRST_NAMES.has(b) && a.length >= 3);
+}
+
+/**
+ * Tipo di email: 'pec' | 'system' | 'generic' (alias funzionale: info@, visit@, booking@…) |
+ * 'personal' (forma da persona: nome.cognome@…) | 'company' (casella dell'azienda senza alias, es. agriturismolamora@).
+ */
 export function emailCategory(email, { pec = false } = {}) {
-  const [local, host] = String(email).split('@');
-  if (pec || isPec(local, host || '')) return 'pec';
+  const [local = '', host = ''] = String(email).toLowerCase().split('@');
+  if (pec || isPec(local, host)) return 'pec';
   if (SYSTEM_LOCAL.test(local)) return 'system';
-  return GENERIC_LOCAL.test(local) ? 'generic' : 'personal';
+  if (isFunctionalLocal(local)) return 'generic';
+  return hasPersonalShape(local) ? 'personal' : 'company';
+}
+
+// Testo di un elemento vicino attaccato all'email: "+39 393 4363917agriturismolamora@gmail.com" (le
+// ultime cifre del telefono), "E-mailinfo@…". Si ricordano i possibili prefissi incollati; l'email si
+// scarta solo se la stessa senza prefisso ha una fonte più affidabile (vedi lib/siteData.js).
+const GLUED_PREFIX = /^(?:(e-?mail|mail|posta|pec|tel|telefono|phone|fax|cell|cellulare|mobile|whatsapp|contatti|contattaci|contacts?|scrivici)[._-]?)?([+\d][\d.+-]*)?$/;
+const NUMBER_BEFORE = /(?:\d[ \t.\/-]?|\+|\b(?:tel|telefono|phone|cell|cellulare|mobile|whats\s?app|fax)\.?[ \t]*:?[ \t]*)$/i;
+
+function gluedPrefixes(local, before) {
+  const out = [];
+  for (let k = 1; k < local.length - 1; k += 1) {
+    const m = local.slice(0, k).match(GLUED_PREFIX);
+    if (!m || !/^[a-z0-9]/.test(local.slice(k))) continue;
+    const [, label, number = ''] = m;
+    const digits = number.replace(/\D/g, '').length;
+    if (number && !digits) continue;
+    // cifre: solo se seguono un numero o un'etichetta di telefono, o se sono già un numero intero
+    if (number ? label || digits >= 6 || NUMBER_BEFORE.test(before) : label) out.push(local.slice(0, k));
+  }
+  return out;
 }
 
 const deobfuscate = (text) => text
@@ -360,20 +406,24 @@ const deobfuscate = (text) => text
   .replace(/\s*[[(]\s*(?:dot|punto)\s*[\])]\s*/gi, '.');
 
 function collectEmails(ctx, add) {
-  const push = (raw, base, method, { zone = '', evidence = '', pecLabel = false } = {}) => {
+  const push = (raw, base, method, { zone = '', evidence = '', pecLabel = false, before = null } = {}) => {
     const email = normalizeEmail(raw);
     if (!email) return;
     const [local, host] = email.split('@');
     if (IGNORED_EMAIL_DOMAINS.test(host)) return;
     const pec = pecLabel || isPec(local, host);
+    const category = emailCategory(email, { pec });
+    const glued = before === null ? [] : gluedPrefixes(local, before);
     let score = base;
     if (sameSite(host, ctx.domain)) score += 4;
-    if (GENERIC_LOCAL.test(local)) score += 2;
+    if (category === 'generic') score += 2;
+    if (category === 'company') score += 1; // casella dell'azienda: prima di una personale
     if (MAIN_LOCAL.test(local)) score += 1; // la casella generale per eccellenza
     if (pec) score -= 4;
-    if (SYSTEM_LOCAL.test(local)) score -= 5;
+    if (category === 'system') score -= 5;
+    if (glued.length) score -= 2;
     if (isZone(zone)) score += 1;
-    add('email', email, { method, score, high: true, key: email, evidence, extra: { pec } });
+    add('email', email, { method, score, high: !glued.length, key: email, evidence, extra: glued.length ? { pec, gluedPrefixes: glued } : { pec } });
   };
   ctx.orgs.forEach((org, i) => {
     for (const e of ldTexts(org.node.email)) push(e, i === 0 ? 7 : 5, METHOD.jsonld, { evidence: `JSON-LD ${org.types.join(', ')}: email` });
@@ -393,7 +443,10 @@ function collectEmails(ctx, add) {
     for (const m of text.matchAll(EMAIL_IN_TEXT)) {
       // l'etichetta "PEC:" vale solo per l'email che la segue subito, non per la successiva
       const before = text.slice(Math.max(0, m.index - 40), m.index);
-      push(m[0], 2, method, { zone, evidence: snippet(text, m.index, m[0].length), pecLabel: /(?:(?<![\w@.-])pec(?![\w@-])|posta\s+elettronica\s+certificata)[^@\n]{0,12}$/i.test(before) });
+      push(m[0], 2, method, {
+        zone, before, evidence: snippet(text, m.index, m[0].length),
+        pecLabel: /(?:(?<![\w@.-])pec(?![\w@-])|posta\s+elettronica\s+certificata)[^@\n]{0,12}$/i.test(before),
+      });
     }
   }
 }
@@ -644,10 +697,12 @@ const ROLE = ROLES.map(([r]) => r).sort((a, b) => b.length - a.length).map(casel
 const NAME_WORD = String.raw`(?:\p{Lu}['’]\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?|\p{Lu}['’]\p{Lu}{2,}|\p{Lu}{2,}(?:-\p{Lu}{2,})?)`;
 // da 1 a 4 parole: il solo nome di battesimo vale solo se è un nome noto (vedi nameTokens)
 const NAME = String.raw`${NAME_WORD}(?:[ \t]+${NAME_WORD}){0,3}`;
-// "Titolare: Mario Rossi" / "Titolare\nMario Rossi" / "Host: Paolo"
-const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*[:\-–—,]?[ \t]*(?:\n[ \t]*){0,2}(${NAME})(?!\p{L})`, 'gu');
-// "Mario Rossi – Titolare" / "Mario Rossi (titolare)" / "Mario Rossi\nTitolare" / "Paolo – Host"
-const NAME_THEN_ROLE = new RegExp(String.raw`(?<!\p{L})(${NAME})[ \t]*(?:[,\-–—|:(/][ \t]*|(?:\n[ \t]*){1,2})(${ROLE})(?!\p{L})`, 'gu');
+// "Titolare: Mario Rossi" / "Titolare\nMario Rossi" / "Host: Paolo" / "Il vostro host Paolo" / "Il vostro host è Paolo"
+const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*(?:[:\-–—,]|(?:è|e['’])(?!\p{L}))?[ \t]*(?:\n[ \t]*){0,2}(${NAME})(?!\p{L})`, 'gu');
+// "Mario Rossi – Titolare" / "Mario Rossi (titolare)" / "Mario Rossi\nTitolare" / "Paolo – Host" /
+// "Paolo, host di …" / "Paolo, il vostro host"
+const ROLE_ARTICLE = String.raw`(?:(?:[Ii]l|[Ll][ao])[ \t]+|[Ll]['’][ \t]*)?(?:(?:vostr[oaie]|nostr[oaie]|tu[oa])[ \t]+)?`;
+const NAME_THEN_ROLE = new RegExp(String.raw`(?<!\p{L})(${NAME})[ \t]*(?:[,\-–—|:(/][ \t]*|(?:\n[ \t]*){1,2})${ROLE_ARTICLE}(${ROLE})(?!\p{L})`, 'gu');
 
 // parole che compaiono vicino ai ruoli ma non sono nomi di persona
 const NOT_NAME = new Set([
@@ -657,6 +712,7 @@ const NOT_NAME = new Set([
   'hotel', 'ristorante', 'osteria', 'trattoria', 'resort', 'relais', 'masseria', 'casale', 'locanda', 'bed', 'breakfast',
   'camere', 'appartamenti', 'srl', 'srls', 'spa', 'snc', 'sas', 'societa', 'soc', 'coop', 'cooperativa', 'gruppo',
   'studio', 'agenzia', 'consorzio', 'il', 'i', 'gli', 'un', 'una', 'uno', 'nostro', 'nostra', 'nostri', 'nostre',
+  'vostro', 'vostra', 'vostri', 'vostre', 'tuo', 'tua', 'sono', 'ecco', 'io', 'mi', 'vi', 'ti',
   'team', 'staff', 'the', 'our', 'and', 'servizi', 'prodotti', 'vini', 'vino', 'olio', 'eventi', 'degustazioni',
   'offerte', 'galleria', 'gallery', 'foto', 'video', 'storia', 'territorio', 'vigneti', 'enoteca', 'ospitalita',
   'privacy', 'cookie', 'policy', 'termini', 'condizioni', 'informativa', 'accetta', 'rifiuta', 'personalizza',
@@ -753,7 +809,7 @@ function peopleFromJsonLd(nodes, out) {
     const linkedin = [...ldTexts(node.sameAs), ...ldTexts(node.url)].map(normalizeLinkedin).find((li) => li?.kind === 'profile')?.url || '';
     const phone = normalizePhone(ldText(node.telephone));
     const phones = phoneFields(phone ? formatPhone(phone) : '', METHOD.jsonld);
-    const email = normalizeEmail(ldText(node.email));
+    const email = ownEmail(normalizeEmail(ldText(node.email)));
     out.push(person({
       firstName, lastName, role, linkedin, email, ...phones,
       fieldMethods: { ...phones.fieldMethods, ...(email ? { email: METHOD.jsonld } : {}), ...(linkedin ? { linkedin: METHOD.jsonld } : {}) },
@@ -773,7 +829,8 @@ function peopleFromLinks(links, out) {
     const { firstName, lastName } = splitName(words);
     const evidence = cleanText(`${str(link.text) || str(link.label)} → ${str(link.href)}`, 200);
     if (link.kind === 'mailto') {
-      const email = normalizeEmail(str(link.href));
+      // un nome scritto su un link a info@ o visit@ non basta a fare una persona
+      const email = ownEmail(normalizeEmail(str(link.href)));
       if (email) out.push(person({ firstName, lastName, email, fieldMethods: { email: METHOD.mailto }, method: METHOD.mailto, evidence, order: 500 + i }));
     } else if (link.kind === 'linkedin') {
       const li = normalizeLinkedin(str(link.href));
@@ -782,15 +839,20 @@ function peopleFromLinks(links, out) {
   });
 }
 
+// le caselle dell'azienda (alias funzionali, PEC, indirizzi di sistema) non sono l'email di una persona
+const ownEmail = (email) => (email && ['personal', 'company'].includes(emailCategory(email)) ? email : '');
+
 // recapiti scritti subito dopo una persona (stessa scheda del team): email personale, cellulare,
-// WhatsApp; un numero fisso solo sulla stessa riga (sulla riga dopo di solito è quello dell'azienda)
-function contactsNear(text) {
+// WhatsApp; un numero fisso solo sulla stessa riga (sulla riga dopo di solito è quello dell'azienda).
+// Un'email senza forma da persona (es. agriturismolamora@) vale solo se contiene il suo nome.
+function contactsNear(text, who) {
   const found = { fieldMethods: {} };
   const lineEnd = text.indexOf('\n') < 0 ? text.length : text.indexOf('\n');
   const clean = deobfuscate(text);
   for (const m of clean.matchAll(EMAIL_IN_TEXT)) {
     const email = normalizeEmail(m[0]);
-    if (email && emailCategory(email) === 'personal') {
+    const category = email ? emailCategory(email) : '';
+    if (category === 'personal' || (category === 'company' && emailMatchesPerson(email, who))) {
       found.email = email;
       found.fieldMethods.email = METHOD.nearName;
       break;
@@ -852,9 +914,10 @@ function peopleFromText(text, out) {
   accepted.forEach((p, i) => {
     // i recapiti fino alla persona successiva, al massimo tre righe
     const limit = Math.min(accepted[i + 1]?.start ?? text.length, p.end + 220);
-    const near = contactsNear(text.slice(p.end, limit).split('\n').slice(0, 4).join('\n'));
+    const name = splitName(p.words);
+    const near = contactsNear(text.slice(p.end, limit).split('\n').slice(0, 4).join('\n'), name);
     out.push(person({
-      ...splitName(p.words),
+      ...name,
       ...near,
       role: displayRole(p.rawRole),
       priority: rolePriority(p.rawRole),
@@ -893,11 +956,16 @@ function mergePeople(list) {
   return [...byKey.values()];
 }
 
+// email con il nome della persona: nome@, nome.cognome@, m.rossi@, rossi.mario@; per un'email con
+// forma da persona basta il cognome (maria.bianchi@), per le altre serve la combinazione esatta
 function emailMatchesPerson(email, p) {
-  const local = normKey(email.split('@')[0]);
+  const flat = normKey(email.split('@')[0].replace(/\d+$/, ''));
   const last = normKey(p.lastName);
   const first = normKey(p.firstName.split(' ')[0]);
-  return (last.length >= 3 && local.includes(last)) || (first.length >= 3 && local === first);
+  if (first.length >= 3 && flat === first) return true;
+  if (last.length < 3) return false;
+  if (emailCategory(email) === 'personal' && flat.includes(last)) return true;
+  return first.length >= 1 && [first + last, first[0] + last, last + first, last + first[0]].includes(flat);
 }
 
 function profileMatchesPerson(url, p) {
@@ -913,10 +981,12 @@ function findPeople(ctx, facts) {
   const found = [];
   peopleFromJsonLd(ctx.ld, found);
   peopleFromLinks(ctx.links, found);
-  peopleFromText(ctx.text.page, found);
+  // contenuto e footer separati: i recapiti dell'azienda nel footer non finiscono sull'ultima persona della pagina
+  peopleFromText(ctx.text.main, found);
+  if (ctx.text.main !== ctx.text.page) peopleFromText(ctx.text.footer, found);
   const people = mergePeople(found);
 
-  const personalEmails = unique(facts.filter((f) => f.kind === 'email' && emailCategory(f.value, f.extra) === 'personal').map((f) => f.value));
+  const personalEmails = unique(facts.filter((f) => f.kind === 'email' && ownEmail(f.value) && !f.extra.gluedPrefixes && !f.extra.pec).map((f) => f.value));
   const profiles = unique(ctx.links
     .filter((l) => l.kind === 'linkedin')
     .map((l) => normalizeLinkedin(str(l.href)))

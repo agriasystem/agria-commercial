@@ -16,6 +16,7 @@
 </header>
 
 <main class="wrap">
+  <p id="active-user" class="who"></p>
   <section id="status" class="card status" data-state="idle" aria-labelledby="status-title">
     <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
     <div aria-live="polite">
@@ -58,8 +59,11 @@
   </section>
 
   <section class="card" aria-labelledby="data-title">
-    <h2 id="data-title" class="eyebrow">Tutti i dati rilevati</h2>
-    <div id="all-data" class="all-data"></div>
+    <details id="all-data-box" class="diag">
+      <summary><h2 id="data-title" class="eyebrow">Tutti i dati rilevati <span id="data-count" class="count"></span></h2></summary>
+      <p class="hint">Diagnostica: ogni valore trovato, con affidabilità e pagine di origine.</p>
+      <div id="all-data" class="all-data"></div>
+    </details>
   </section>
 
   <section class="card" aria-labelledby="hubspot-title">

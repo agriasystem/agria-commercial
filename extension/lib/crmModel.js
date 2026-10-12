@@ -7,7 +7,7 @@
 // affidabile, gli altri restano come alternative.
 
 import { emailCategory } from './parser.js';
-import { factsOf, peopleOf } from './siteData.js';
+import { factsOf, isContactEligible, peopleOf } from './siteData.js';
 import { normalizePhone } from './validation.js';
 import { isProvinceCode, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
 
@@ -19,7 +19,8 @@ export const TIPO_STRUTTURA_OPTIONS = [
 export const LEAD_STATUS = Object.freeze({ value: 'NEW', label: 'Da contattare' });
 export const LEGAL_BASIS = 'Legitimate interest – prospect/lead';
 
-// proprietà nell'ordine del form HubSpot; label = testo mostrato al commerciale
+// proprietà nell'ordine del form HubSpot; label = testo mostrato al commerciale;
+// visibleIf = il campo si mostra solo quando gli altri campi hanno questi valori
 export const COMPANY_PROPS = [
   { name: 'name', label: 'Nome azienda' },
   { name: 'domain', label: 'Dominio', check: 'domain' },
@@ -28,7 +29,7 @@ export const COMPANY_PROPS = [
   { name: 'email_aziendale_principale', label: 'Email aziendale principale', check: 'email' },
   { name: 'email_aziendale_secondaria', label: 'Email aziendale secondaria', check: 'email' },
   { name: 'settore_agria', label: 'Settore Agria', input: 'select', options: SETTORE_OPTIONS },
-  { name: 'tipo_struttura_hospitality', label: 'Tipo struttura Hospitality', input: 'select', options: TIPO_STRUTTURA_OPTIONS },
+  { name: 'tipo_struttura_hospitality', label: 'Tipo struttura Hospitality', input: 'select', options: TIPO_STRUTTURA_OPTIONS, visibleIf: { settore_agria: 'Hospitality' } },
   { name: 'city', label: 'Città', half: true },
   { name: 'state', label: 'Regione', half: true },
   { name: 'country', label: 'Paese' },
@@ -52,6 +53,20 @@ export const CONTACT_PROPS = [
 const unique = (list) => [...new Set(list.filter(Boolean))];
 const MAX_QUICK_CONTEXT = 65000; // limite di un campo testo multiriga HubSpot: 65.536 caratteri
 const HIGH_PERSON_METHODS = new Set(['dati strutturati JSON-LD', 'link email', 'link LinkedIn']);
+
+/** Il campo va mostrato? (values: valori attuali del form { proprietà: testo }) */
+export function isPropVisible(prop, values = {}) {
+  return !prop.visibleIf || Object.entries(prop.visibleIf).every(([name, value]) => values[name] === value);
+}
+
+/** Valori del form Contatto → persona, per la regola del Contatto HubSpot. */
+export const contactPerson = (values = {}) => {
+  const v = (name) => String(values[name] || '').trim();
+  return { firstName: v('firstname'), lastName: v('lastname'), email: v('email'), phone: v('phone'), mobile: v('mobilephone'), linkedin: v('hs_linkedin_url') };
+};
+
+/** Contatto valido: nome + cognome + almeno uno tra email, telefono e LinkedIn. */
+export const isContactReady = (values) => isContactEligible(contactPerson(values));
 
 export const emptyProposal = (alternatives = []) => ({ value: '', reliability: '', method: '', url: '', evidence: '', alternatives: unique(alternatives) });
 
@@ -125,6 +140,13 @@ export function proposeStructure(signals = {}, names = []) {
   return emptyProposal();
 }
 
+/** Tipo di struttura per il settore scelto: solo per l'Hospitality, altrimenti nessun valore. */
+export function proposeStructureFor(site, settore) {
+  return settore === 'Hospitality'
+    ? proposeStructure(site.signals, factsOf(site, 'name').slice(0, 3).map((f) => f.value))
+    : emptyProposal();
+}
+
 // ---------------------------------------------------------------------------------------------
 // luogo
 
@@ -166,11 +188,11 @@ export function addressesOf(site) {
 // Azienda
 
 /**
- * fixed: valori già scelti a mano per le email, per non proporre due volte la stessa email.
+ * fixed: valori già scelti a mano (email, per non proporre due volte la stessa; settore, per il tipo
+ * di struttura). La ragione sociale resta tra i dati rilevati: non è proposta per HubSpot.
  */
 export function proposeCompany(site, config, { fixed = {} } = {}) {
   const names = factsOf(site, 'name');
-  const legalNames = factsOf(site, 'legalName');
   const phones = factsOf(site, 'phone');
   const people = peopleOf(site);
 
@@ -193,16 +215,14 @@ export function proposeCompany(site, config, { fixed = {} } = {}) {
   const sector = proposeSector(site.signals);
 
   return {
-    name: fromFact(names[0], [...names.slice(1), ...legalNames].map((f) => f.value)),
+    name: fromFact(names[0], names.slice(1).map((f) => f.value)),
     domain: fixedValue(site.domain, 'indirizzo del sito', site.origin),
     website: fixedValue(site.origin, 'indirizzo del sito', site.origin),
     phone: fromFact(phones[0], [...phones.slice(1), ...factsOf(site, 'whatsapp')].map((f) => f.value)),
     email_aziendale_principale: fromFact(principal, allEmails),
     email_aziendale_secondaria: fromFact(secondary, allEmails),
     settore_agria: sector,
-    tipo_struttura_hospitality: sector.value === 'Hospitality'
-      ? proposeStructure(site.signals, names.slice(0, 3).map((f) => f.value))
-      : emptyProposal(),
+    tipo_struttura_hospitality: proposeStructureFor(site, fixed.settore_agria ?? sector.value),
     city: place?.extra.city
       ? { ...fromFact(place), value: place.extra.city, alternatives: unique(addresses.map((a) => a.extra.city)).filter((c) => c !== place.extra.city) }
       : emptyProposal(addresses.map((a) => a.extra.city)),
@@ -256,64 +276,52 @@ export function proposeContact(site, config, chosenKey = null) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Contesto rapido (hs_quick_context): solo dati trovati davvero che non hanno un campo dedicato
+// Contesto rapido (hs_quick_context): informazioni operative trovate davvero che non hanno un campo
+// HubSpot dedicato. Non è una raccolta di dati societari: ragione sociale, codice fiscale, REA, CIN,
+// SDI e sede legale restano solo tra i dati rilevati; della parte legale entra soltanto la P.IVA.
+
+// sistemi esterni utili al commerciale, in quest'ordine (CMS e strumenti privacy no)
+const COMMERCIAL_SYSTEMS = ['Booking engine', 'Portale', 'Prenotazione ristorante', 'E-commerce'];
+
+/** "Paolo — Host (cognome non trovato)", "Mario Rossi — Proprietario" */
+export const personLine = (p) => `${[p.firstName, p.lastName].filter(Boolean).join(' ')}${p.role ? ` — ${p.role}` : ''}${p.lastName ? '' : ' (cognome non trovato)'}`;
 
 /** company/contact: valori attuali del form { proprietà: testo }. */
 export function buildQuickContext(site, company = {}, contact = {}) {
-  const lines = ['DATI AGGIUNTIVI RILEVATI DAL SITO'];
-  const section = (title, items) => {
-    if (items.length) lines.push('', `${title}:`, ...items.map((i) => `- ${i}`));
+  const sections = [];
+  // bullets: false per i valori singoli (numero WhatsApp, P.IVA), "- " per gli elenchi
+  const section = (title, items, { bullets = true } = {}) => {
+    const list = unique(items);
+    if (list.length) sections.push([title, ...list.map((i) => (bullets ? `- ${i}` : i))].join('\n'));
   };
-  const usedEmails = new Set([company.email_aziendale_principale, company.email_aziendale_secondaria, contact.email]
-    .filter(Boolean).map((e) => e.trim().toLowerCase()));
+  const lower = (v) => String(v || '').trim().toLowerCase();
+  const usedEmails = new Set([company.email_aziendale_principale, company.email_aziendale_secondaria, contact.email].map(lower).filter(Boolean));
   const usedPhones = new Set([company.phone, contact.phone, contact.mobilephone].map((p) => normalizePhone(p || '')).filter(Boolean));
-  const emails = factsOf(site, 'email');
-  const pecs = emails.filter((f) => emailCategory(f.value, f.extra) === 'pec').map((f) => f.value);
-  const flag = (f) => (f.extra.invalid ? ' (cifra di controllo non valida: da verificare)' : '');
+  const whatsapp = factsOf(site, 'whatsapp');
+  const whatsappKeys = new Set(whatsapp.map((f) => f.key));
+  const emails = factsOf(site, 'email').map((f) => ({ ...f, category: emailCategory(f.value, f.extra) }));
+  const piva = factsOf(site, 'piva')[0];
 
-  section('WhatsApp', factsOf(site, 'whatsapp').map((f) => f.value));
-  section('Email aggiuntive', emails
-    .filter((f) => !usedEmails.has(f.value) && emailCategory(f.value, f.extra) !== 'pec' && emailCategory(f.value, f.extra) !== 'system')
+  section('WHATSAPP', whatsapp.map((f) => f.value), { bullets: false });
+  if (piva) section('P.IVA', [`${piva.value}${piva.extra.invalid ? ' (cifra di controllo non valida: da verificare)' : ''}`], { bullets: false });
+  section('ULTERIORI EMAIL', emails
+    .filter((f) => !usedEmails.has(f.value) && f.category !== 'pec' && f.category !== 'system')
     .map((f) => f.value));
-  section('Telefoni aggiuntivi', [
-    ...factsOf(site, 'phone').filter((f) => !usedPhones.has(f.key)).map((f) => f.value),
-    ...factsOf(site, 'fax').map((f) => `Fax ${f.value}`),
+  // né il telefono già nei campi né un numero che è solo il WhatsApp ripetuto
+  section('ULTERIORI TELEFONI', factsOf(site, 'phone')
+    .filter((f) => !usedPhones.has(f.key) && !whatsappKeys.has(f.key))
+    .map((f) => f.value));
+  section('POTENZIALI CONTATTI', peopleOf(site).map(personLine));
+  section('ALTRI CANALI', [
+    ...factsOf(site, 'social').filter((f) => f.value !== company.linkedin_company_page).map((f) => `${f.extra.network}: ${f.value}`),
+    ...factsOf(site, 'fax').map((f) => `Fax: ${f.value}`),
+    ...emails.filter((f) => f.category === 'pec').map((f) => `PEC: ${f.value}`),
   ]);
+  const systems = factsOf(site, 'system').filter((s) => COMMERCIAL_SYSTEMS.includes(s.extra.category));
+  section('ALTRE INFORMAZIONI COMMERCIALI UTILI', COMMERCIAL_SYSTEMS
+    .map((category) => [category, systems.filter((s) => s.extra.category === category).map((s) => s.value)])
+    .filter(([, names]) => names.length)
+    .map(([category, names]) => `${category}: ${names.join(', ')}`));
 
-  const corporate = [];
-  const first = (kind) => factsOf(site, kind)[0];
-  const legal = first('legalName');
-  if (legal) corporate.push(`Ragione sociale: ${legal.value}`);
-  const piva = first('piva');
-  const cf = first('cf');
-  if (piva && cf && piva.value === cf.value) corporate.push(`P.IVA e codice fiscale: ${piva.value}${flag(piva)}`);
-  else {
-    if (piva) corporate.push(`P.IVA: ${piva.value}${flag(piva)}`);
-    if (cf) corporate.push(`Codice fiscale: ${cf.value}${flag(cf)}`);
-  }
-  const rea = first('rea');
-  if (rea) corporate.push(`REA: ${rea.value}`);
-  const cin = first('cin');
-  if (cin) corporate.push(`CIN: ${cin.value}`);
-  for (const pec of pecs) corporate.push(`PEC: ${pec}`);
-  const sdi = first('sdi');
-  if (sdi) corporate.push(`Codice SDI: ${sdi.value}`);
-  const seat = factsOf(site, 'address').find((a) => a.extra.legalSeat);
-  if (seat) corporate.push(`Sede legale: ${seat.value}`);
-  section('Dati societari', corporate);
-
-  section('Persone rilevate', peopleOf(site).map((p) => `${[p.firstName, p.lastName].filter(Boolean).join(' ')}${p.role ? ` — ${p.role}` : ''}${p.lastName ? '' : ' [dato parziale]'}`));
-  section('Social aggiuntivi', factsOf(site, 'social')
-    .filter((f) => f.value !== company.linkedin_company_page)
-    .map((f) => `${f.extra.network}: ${f.value}`));
-
-  const other = [];
-  const place = addressesOf(site).find((a) => !a.extra.legalSeat);
-  if (place) other.push(`Indirizzo: ${place.value}`);
-  const systems = {};
-  for (const s of factsOf(site, 'system')) (systems[s.extra.category] ||= []).push(s.value);
-  for (const [category, names] of Object.entries(systems)) other.push(`${category}: ${names.join(', ')}`);
-  section('Altre informazioni utili', other);
-
-  return lines.length > 1 ? lines.join('\n').slice(0, MAX_QUICK_CONTEXT) : '';
+  return sections.join('\n\n').slice(0, MAX_QUICK_CONTEXT);
 }

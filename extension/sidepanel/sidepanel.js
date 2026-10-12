@@ -5,8 +5,8 @@ import { analyzeSnapshot } from '../lib/parser.js';
 import { pageTypeOf } from '../lib/discovery.js';
 import { fetchText } from '../lib/fetchPage.js';
 import { scanSite } from '../lib/scanner.js';
-import { summaryOf } from '../lib/siteData.js';
-import { COMPANY_PROPS, CONTACT_PROPS, LEAD_STATUS } from '../lib/crmModel.js';
+import { factsOf, summaryOf } from '../lib/siteData.js';
+import { COMPANY_PROPS, CONTACT_PROPS, isPropVisible, LEAD_STATUS } from '../lib/crmModel.js';
 import {
   applyFindings, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
   restoreDraft, setLegalBasisConfirmed, usePerson,
@@ -36,6 +36,7 @@ const STALE = { kind: 'warn', title: 'Verifica da ripetere', text: 'Dati o impos
 const SCAN_TIMEOUT_MS = 10000;
 
 const $ = (selector) => document.querySelector(selector);
+const valuesOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
 let draft = emptyDraft();
 let config = normalizeConfig(null);
 let busy = ''; // '' | 'scan' | 'analyze'
@@ -77,6 +78,7 @@ function buildForms() {
         const box2 = el('input', { id: 'legal-basis-confirm', type: 'checkbox' });
         box2.addEventListener('change', () => {
           draft = setLegalBasisConfirmed(draft, box2.checked);
+          box2.checked = draft.legalBasisConfirmed;
           renderMeta('contact', prop);
           scheduleSave();
         });
@@ -133,7 +135,8 @@ function renderField(section, prop) {
     control.value = prop.input === 'select' && !prop.options.includes(field.value) ? '' : field.value;
   }
   if (prop.input === 'legalBasis') $('#legal-basis-confirm').checked = draft.legalBasisConfirmed;
-  if (prop.name === 'tipo_struttura_hospitality') control.disabled = draft.company.settore_agria.value !== 'Hospitality';
+  // campi che valgono solo in certi casi (tipo di struttura: solo Hospitality): nascosti del tutto
+  if (prop.visibleIf) $(`#${section}-${prop.name}-field`).hidden = !isPropVisible(prop, valuesOf(draft[section]));
   renderMeta(section, prop);
   const alts = $(`#${section}-${prop.name}-field .alts`);
   const chips = ['owner', 'fixed', 'legalBasis', 'textarea', 'select'].includes(prop.input) ? [] : alternatives(field.alternatives, (value) => {
@@ -144,11 +147,16 @@ function renderField(section, prop) {
   alts.hidden = !chips.length;
 }
 
+// la base giuridica compare solo quando il contatto è valido (nome, cognome e un recapito)
 function renderReadiness() {
   const { ready, text } = contactReadiness(draft.contact);
   const box = $('#contact-ready');
   box.textContent = text;
   box.dataset.ready = ready ? 'yes' : 'no';
+  $('#contact-hs_legal_basis-field').hidden = !ready;
+  $('#legal-basis-confirm').disabled = !ready;
+  $('#legal-basis-confirm').checked = draft.legalBasisConfirmed;
+  renderMeta('contact', PROPS.contact.find((p) => p.input === 'legalBasis'));
 }
 
 function renderForms() {
@@ -169,6 +177,8 @@ function renderPeople() {
 
 function renderSiteData() {
   $('#all-data').replaceChildren(...allDataGroups(draft.site));
+  const contacts = ['email', 'phone', 'whatsapp'].reduce((n, kind) => n + factsOf(draft.site, kind).length, 0);
+  $('#data-count').textContent = contacts ? `${contacts} ${contacts === 1 ? 'recapito' : 'recapiti'}` : '';
   const { pages, failures } = draft.site;
   const details = $('#pages');
   details.hidden = !pages.length && !failures.length;
@@ -403,8 +413,12 @@ async function onVerify() {
   }
 }
 
+// il commerciale di questo browser (Impostazioni locali, mai sincronizzate)
 function renderConfig() {
   $('#mock-scenario').textContent = MOCK_SCENARIOS[config.hubspot.mockScenario];
+  const { ownerName, ownerId } = config.hubspot;
+  const who = ownerName || (ownerId ? `ID owner ${ownerId}` : '');
+  $('#active-user').replaceChildren('Commerciale attivo: ', who ? el('strong', {}, who) : el('span', { class: 'bad' }, 'non impostato (vedi Impostazioni)'));
 }
 
 // ---------------------------------------------------------------------------------------------

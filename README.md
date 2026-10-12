@@ -24,7 +24,12 @@ nessuno scraping di Google Maps.
 2. **Carica estensione non pacchettizzata** e scegli la cartella **`agria-scout/extension`**
    (quella che contiene `manifest.json`).
 3. Fissa Agria Scout nella barra (icona del puzzle → puntina). Un clic sull'icona apre il pannello.
-4. Apri **Impostazioni** e indica nome e **ID owner HubSpot** del commerciale.
+4. Apri **Impostazioni** e indica nome e **ID owner HubSpot** del commerciale. Si salvano da soli
+   mentre scrivi («✓ Salvato» accanto al campo); «← Torna ad Agria Scout» chiude la pagina. Il
+   pannello mostra in alto «Commerciale attivo: {nome}».
+
+**Più commerciali:** le impostazioni restano in questo browser (`chrome.storage.local`, mai
+sincronizzate): ogni installazione è un commerciale diverso, con il suo nome e il suo ID owner.
 
 **Aggiornare dopo una nuova versione del codice:** in `chrome://extensions` premi ↻ sulla scheda
 di Agria Scout, poi chiudi e riapri il pannello laterale. Le impostazioni restano; la bozza in
@@ -38,13 +43,16 @@ corso di una versione precedente si azzera. Serve Chrome 116 o successivo.
    «24 pagine · 4 email · 3 telefoni · 1 WhatsApp · 2 persone».
 3. Controlla i form. Sotto ogni campo: **Alta affidabilità** o **Da verificare**, la pagina di
    origine (cliccabile) e il metodo. I chip *Altri trovati* sostituiscono il valore con un clic.
-4. **Persone rilevate**: tutte le persone, anche parziali («Paolo — Host — cognome non trovato»),
-   con recapiti, pagina e testo da cui sono state ricavate. Diventa Contatto in automatico solo chi
-   ha **nome + cognome + almeno uno tra email, telefono e LinkedIn**; con «Usa come contatto» il
-   commerciale può scegliere un'altra persona.
-5. **Tutti i dati rilevati**: ogni email, telefono, WhatsApp, fax, indirizzo, dato societario,
-   social e sistema esterno trovato, con tutte le sue fonti.
-6. Conferma la **base giuridica** del Contatto e, se serve, correggi il **contesto rapido**.
+4. **Persone rilevate**: tutte le persone, anche parziali («Paolo — Host», *Persona parziale*,
+   *Cognome non trovato*), con recapiti, pagina e testo da cui sono state ricavate. Diventa Contatto
+   in automatico solo chi ha **nome + cognome + almeno uno tra email, telefono e LinkedIn**; con
+   «Usa come contatto» il commerciale può scegliere un'altra persona. Il cognome non si inventa mai.
+5. **Tutti i dati rilevati** (diagnostica, chiusa all'inizio): email, telefoni, WhatsApp, persone,
+   indirizzi, social, P.IVA, poi gli altri dati; ragione sociale, codice fiscale, REA, CIN e SDI in
+   fondo, in «Dati legali (non usati in HubSpot)».
+6. La **base giuridica** compare quando il Contatto è valido: si conferma a mano, e va confermata
+   di nuovo se cambia la persona o il contatto smette di essere valido. Se serve, correggi il
+   **contesto rapido**.
 7. **Verifica HubSpot** (MOCK) per provare il controllo dei doppioni.
 
 **Analizza solo questa pagina** legge soltanto la pagina aperta. Pagine dello stesso sito si
@@ -63,16 +71,27 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
 - `settore_agria`: Hospitality · Cantina / Vitivinicolo · Frantoio / Olivicolo · Altro.
 - `tipo_struttura_hospitality` (solo per Hospitality): Agriturismo · Boutique Hotel · Relais ·
   Masseria · Resort indipendente · Hotel · Struttura con ristorante · Struttura con spa · Altro.
+  Con un altro settore il campo è nascosto; se il commerciale sceglie Hospitality ricompare.
   Settore e tipo sono proposti dalle parole del sito e restano sempre *da verificare*.
 - `hs_lead_status`: `NEW` («Da contattare») per un nuovo prospect.
 - `hubspot_owner_id`: il commerciale delle Impostazioni, mai dedotto dal sito.
-- `hs_legal_basis`: suggerito «Legitimate interest – prospect/lead», da confermare a mano.
-- Email: Scout propone una principale e una secondaria tra quelle aziendali (generiche, del
-  dominio del sito); PEC, indirizzi di sistema ed email personali di una persona restano fuori, ma
-  tutte le email restano selezionabili.
-- `hs_quick_context`: generato solo con dati trovati che non hanno un campo dedicato (WhatsApp,
-  email e telefoni in più, fax, ragione sociale, P.IVA, codice fiscale, REA, CIN, PEC, SDI, sede
-  legale, persone, social, indirizzo, booking engine e portali).
+- `hs_legal_basis`: suggerito «Legitimate interest – prospect/lead», da confermare a mano, solo
+  per un Contatto valido.
+- Nome azienda: la ragione sociale non viene proposta (resta tra i dati legali rilevati).
+- Email: Scout propone una principale e una secondaria tra quelle aziendali; PEC, indirizzi di
+  sistema ed email di una persona restano fuori, ma tutte le email restano selezionabili.
+  Classificazione fissa: **aziendale generica** per gli alias funzionali (info, contact, visit,
+  booking, prenotazioni, reception, sales, commerciale, amministrazione, office, segreteria,
+  marketing, eventi, shop, store, hospitality, welcome, staff, support, assistenza…), mai prova
+  dell'esistenza di una persona; **personale** solo con la forma di un nome (nome@, nome.cognome@,
+  iniziale.cognome@, cognome.nome@) o se contiene il nome di una persona rilevata vicina;
+  **aziendale** per le altre caselle (es. agriturismolamora@gmail.com).
+- `hs_quick_context`: informazioni operative trovate che non hanno un campo dedicato, in
+  quest'ordine: **WHATSAPP**, **P.IVA**, **ULTERIORI EMAIL** (oltre principale e secondaria),
+  **ULTERIORI TELEFONI** (non il principale, non il WhatsApp ripetuto), **POTENZIALI CONTATTI**
+  («Paolo — Host (cognome non trovato)»), **ALTRI CANALI** (social, fax, PEC), **ALTRE INFORMAZIONI
+  COMMERCIALI UTILI** (booking engine, portali, prenotazione ristorante, e-commerce). Niente
+  ragione sociale, REA, CIN, SDI, codice fiscale o sede legale; nessun valore ripetuto.
 
 ## Come lavora la scansione
 
@@ -97,6 +116,13 @@ sociale, P.IVA con cifra di controllo, codice fiscale, REA, CIN, SDI, PEC, sede 
 intestazione, resto del testo. Valori uguali su più pagine diventano una voce sola con tutte le
 fonti; valori diversi restano tutti visibili, con il principale proposto e gli altri come
 alternative.
+
+**Email attaccate ad altro testo.** Quando due elementi della pagina sono affiancati senza spazio,
+il testo può diventare «+39 393 4363917agriturismolamora@gmail.com». Scout non taglia cifre a caso
+(un'email può iniziare con delle cifre): scarta il candidato solo se è un'altra email già trovata
+più un prefisso venuto dal testo vicino (cifre di un telefono, «E-mail», «Tel»…) e se l'email
+pulita ha una fonte più affidabile (link email, JSON-LD, campo strutturato o scritta da sola nel
+testo). Senza copia pulita il candidato resta, *da verificare*.
 
 ## Permessi e privacy
 
@@ -142,8 +168,8 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni, mock HubSpot e controlli statici su manifest, permessi e sicurezza. |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, MOCK, annullamento, nuovo prospect, riapertura, Svuota. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale). |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, e i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`). Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 
 `npm run e2e` usa Playwright, che **non** è una dipendenza del progetto: si installa al momento
@@ -156,6 +182,10 @@ con `npm i --no-save playwright && npx playwright install chromium`, oppure si i
   JavaScript (alcuni siti Wix o app) non si vedono. La pagina aperta invece si legge com'è a schermo.
 - Persone, settore e tipo di struttura sono riconosciuti con regole sul testo: per questo sono
   segnati *da verificare*. Impaginazioni insolite possono non dare un contatto o darne uno da correggere.
+  Una persona citata col solo nome si riconosce se il nome è tra quelli comuni (`lib/names.js`)
+  ed è vicino a un ruolo («Paolo, host di…», «Host: Paolo», «Il vostro host è Paolo»).
+- Email attaccate ad altro testo: si riconosce il testo attaccato *davanti* (cifre di un telefono,
+  etichette come «E-mail»); quello attaccato *dopo* il dominio («info@sito.itTel») non ancora.
 - Informative privacy ospitate su servizi esterni (es. iubenda) non vengono lette: sono su un
   altro dominio. Il sistema viene comunque segnalato tra i sistemi esterni.
 - Siti protetti da sistemi anti-bot possono rispondere con un errore: la pagina finisce tra quelle

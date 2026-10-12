@@ -4,7 +4,9 @@
 // (*.test) e ripercorre il lavoro del commerciale: analisi della pagina aperta, correzione a mano,
 // scansione approfondita di tutto il sito (con sitemap, pagine rotte, file non HTML, link verso
 // un altro dominio, blog lungo), persone e dati rilevati, Verifica HubSpot nei tre scenari MOCK,
-// annullamento, nuovo prospect, ripresa dopo la riapertura del pannello, Svuota.
+// annullamento, nuovo prospect, ripresa dopo la riapertura del pannello, Svuota, e i due casi
+// emersi dai test manuali (La Mora: email attaccata al telefono e host senza cognome; Perticaia:
+// alias info@/visit@, cantina, contatto a mano). Impostazioni con salvataggio automatico.
 // Controlla anche che le pagine analizzate non vengano modificate e che la scansione non esca dal
 // dominio né scarichi due volte la stessa pagina. Schermate in .tmp/e2e/.
 //
@@ -41,6 +43,9 @@ const SITES = {
     '/sitemap.xml': 'agriturismo-sitemap.xml',
   },
   'cantinarossi.test': { '/contatti': 'cantina-contatti.html' },
+  // casi emersi dai test manuali sui siti reali (Milestone 1.1.1), riprodotti con dati di prova
+  'lamora-caso.test': { '/': 'caso-lamora-home.html', '/chi-siamo': 'caso-lamora-chi-siamo.html' },
+  'perticaia-caso.test': { '/': 'caso-perticaia.html' },
 };
 
 let chromium;
@@ -184,26 +189,35 @@ async function run(context, site) {
   check('badge MOCK visibile in alto', await panel.isVisible('header .badge.mock'));
   equal('scenario MOCK iniziale', await text('#mock-scenario'), 'Azienda non presente');
   check('pulsante principale «Scansione approfondita»', (await text('#deep-scan')).trim() === 'Scansione approfondita');
+  equal('commerciale attivo non ancora impostato', await text('#active-user'), 'Commerciale attivo: non impostato (vedi Impostazioni)');
 
-  console.log('\nImpostazioni: proprietario HubSpot e limite pagine');
+  console.log('\nImpostazioni: proprietario HubSpot, limite pagine, salvataggio automatico');
   const options = await context.newPage();
   watch(options, 'impostazioni');
   await options.goto(`chrome-extension://${extId}/options/options.html`);
   await options.waitForFunction(() => document.querySelector('input[name="mockScenario"]:checked'));
   equal('limite pagine predefinito', await options.inputValue('#max-pages'), '30');
+  includes('salvataggio automatico dichiarato', await options.textContent('#autosave'), 'Impostazioni salvate automaticamente');
+  equal('pulsante per tornare al pannello', (await options.textContent('#back')).trim(), '← Torna ad Agria Scout');
+  const flagShown = (name) => options.waitForFunction((n) => !document.querySelector(`[data-saved-for="${n}"]`).hidden, name, { timeout: 5000 }).then(() => true, () => false);
+  const flagGone = (name) => options.waitForFunction((n) => document.querySelector(`[data-saved-for="${n}"]`).hidden, name, { timeout: 8000 }).then(() => true, () => false);
   await options.fill('#owner-id', 'abc');
-  await options.$eval('#owner-id', (i) => i.dispatchEvent(new Event('change', { bubbles: true })));
+  await options.waitForFunction(() => document.querySelector('#saved').textContent.includes('solo cifre'), null, { timeout: 5000 }).catch(() => {});
   includes('ID owner non numerico rifiutato', await options.textContent('#saved'), 'solo cifre');
+  check('valore sbagliato: nessun «✓ Salvato»', await options.$eval('[data-saved-for="ownerId"]', (f) => f.hidden));
+  // si scrive e basta, senza uscire dal campo: il salvataggio parte da solo
   await options.fill('#owner-name', 'Commerciale Agria');
-  await options.$eval('#owner-name', (i) => i.dispatchEvent(new Event('change', { bubbles: true })));
-  await options.waitForFunction(() => document.querySelector('#saved').textContent.includes('salvate'));
+  check('nome del commerciale: «✓ Salvato» mentre si scrive', await flagShown('ownerName'));
+  equal('testo della conferma', (await options.textContent('[data-saved-for="ownerName"]')).trim(), '✓ Salvato');
   await options.fill('#owner-id', '123456789');
-  await options.$eval('#owner-id', (i) => i.dispatchEvent(new Event('change', { bubbles: true })));
-  await options.waitForFunction(() => document.querySelector('#saved').textContent.includes('salvate'));
+  check('ID owner: «✓ Salvato»', await flagShown('ownerId'));
+  equal('errore precedente tolto', (await options.textContent('#saved')).trim(), '');
+  await options.screenshot({ path: path.join(OUT, '6-impostazioni.png'), fullPage: true });
+  check('«✓ Salvato» sparisce dopo qualche secondo', await flagGone('ownerName'));
   await panel.waitForFunction(() => document.querySelector('#company-hubspot_owner_id').textContent.includes('123456789'));
   includes('proprietario Azienda dalle Impostazioni', await text('#company-hubspot_owner_id'), 'Commerciale Agria · ID 123456789');
   includes('proprietario Contatto dalle Impostazioni', await text('#contact-hubspot_owner_id'), '123456789');
-  await options.screenshot({ path: path.join(OUT, '6-impostazioni.png'), fullPage: true });
+  equal('commerciale attivo nel pannello', await text('#active-user'), 'Commerciale attivo: Commerciale Agria');
 
   console.log('\nPagina che non è un sito web');
   let r = await analyze(panel);
@@ -276,7 +290,7 @@ async function run(context, site) {
   console.log('\nForm Azienda (HubSpot) dopo la scansione');
   const nameAlternatives = await text('#company-name-field .alts');
   check('i titoli degli articoli non diventano nomi', !/vendemmia|raccolta/i.test(nameAlternatives), nameAlternatives);
-  includes('ragione sociale tra le alternative del nome', nameAlternatives, 'La Mora Società Agricola S.r.l.');
+  check('ragione sociale non proposta come nome', !nameAlternatives.includes('S.r.l.'), nameAlternatives);
   equal('correzione a mano conservata', await value('company-city'), 'Santa Maria degli Angeli');
   equal('email principale', await value('company-email_aziendale_principale'), 'info@agriturismo-lamora.test');
   equal('email secondaria', await value('company-email_aziendale_secondaria'), 'prenotazioni@agriturismo-lamora.test');
@@ -286,16 +300,20 @@ async function run(context, site) {
   equal('settore Agria', await value('company-settore_agria'), 'Hospitality');
   includes('settore da verificare', await text('#company-settore_agria-meta'), 'Da verificare');
   equal('tipo struttura', await value('company-tipo_struttura_hospitality'), 'Agriturismo');
+  check('tipo struttura visibile per Hospitality', await panel.isVisible('#company-tipo_struttura_hospitality-field'));
   equal('regione', await value('company-state'), 'Umbria');
   equal('pagina LinkedIn aziendale', await value('company-linkedin_company_page'), 'https://www.linkedin.com/company/agriturismo-la-mora');
   const quick = await value('company-hs_quick_context');
   for (const part of [
-    'DATI AGGIUNTIVI RILEVATI DAL SITO', 'WhatsApp:', '+39 347 111 2223', 'Ragione sociale: La Mora Società Agricola S.r.l.',
-    'P.IVA e codice fiscale: 01234567897', 'REA: PG-123456', 'CIN: IT054001C2ABCDEFGH', 'PEC: lamora@pec.agriturismo-lamora.test',
-    'Codice SDI: M5UXCR1', 'Sede legale: Via Roma 1, 06123 Perugia (PG)', 'Paolo — Host [dato parziale]',
-    'Instagram: https://www.instagram.com/lamora.agriturismo/', 'Booking engine: Octorate', 'Portale: Booking.com',
-  ]) includes(`contesto rapido: ${part}`, quick, part);
+    'WHATSAPP\n', '+39 347 111 2223', 'P.IVA\n01234567897', 'POTENZIALI CONTATTI\n', 'Paolo — Host (cognome non trovato)',
+    'ALTRI CANALI\n', 'Instagram: https://www.instagram.com/lamora.agriturismo/', 'PEC: lamora@pec.agriturismo-lamora.test',
+    'ALTRE INFORMAZIONI COMMERCIALI UTILI\n', 'Booking engine: Octorate', 'Portale: Booking.com',
+  ]) includes(`contesto rapido: ${part.trim().replace('\n', ' ')}`, quick, part);
+  check('contesto rapido: sezioni nell\'ordine concordato', /^WHATSAPP\n[\s\S]*\n\nP\.IVA\n[\s\S]*\n\nPOTENZIALI CONTATTI\n[\s\S]*\n\nALTRI CANALI\n[\s\S]*\n\nALTRE INFORMAZIONI COMMERCIALI UTILI\n/.test(quick), quick);
   check('contesto rapido senza le email già nei campi', !quick.includes('info@agriturismo-lamora.test') && !quick.includes('prenotazioni@'));
+  for (const legal of ['Ragione sociale', 'Società Agricola', 'PG-123456', 'IT054001C2ABCDEFGH', 'M5UXCR1', 'Sede legale', 'WordPress']) {
+    check(`contesto rapido senza dati societari: ${legal}`, !quick.includes(legal));
+  }
   check('fonte cliccabile', await panel.$$eval('#company-email_aziendale_principale-meta a.src', (a) => a.length > 0 && a[0].href.startsWith('http://agriturismo-lamora.test')));
 
   console.log('\nContatto (HubSpot) e persone rilevate');
@@ -307,18 +325,31 @@ async function run(context, site) {
   equal('contatto: cellulare', await value('contact-mobilephone'), '+39 333 123 4567');
   equal('contatto: LinkedIn', await value('contact-hs_linkedin_url'), 'https://www.linkedin.com/in/maria-bianchi-lamora');
   includes('contatto completo', await text('#contact-ready'), 'Contatto completo');
+  check('contatto valido: base giuridica visibile', await panel.isVisible('#contact-hs_legal_basis-field'));
   equal('base giuridica suggerita', await value('contact-hs_legal_basis'), 'Legitimate interest – prospect/lead');
   check('base giuridica non confermata in automatico', !(await panel.isChecked('#legal-basis-confirm')));
   await panel.check('#legal-basis-confirm');
   includes('base giuridica confermata', await text('#contact-hs_legal_basis-meta'), 'Confermata');
   const people = await text('#people-list');
-  includes('persona parziale mostrata', people, 'Paolo — Host — cognome non trovato');
-  includes('persona parziale non diventa Contatto', people, 'Non utilizzabile come Contatto HubSpot');
+  const paoloCard = await panel.evaluate(() => [...document.querySelectorAll('#people-list .person')].find((c) => c.querySelector('.n').textContent === 'Paolo — Host')?.innerText || '');
+  check('persona parziale mostrata come «Paolo — Host»', Boolean(paoloCard), people);
+  includes('persona parziale: etichetta', paoloCard, 'Persona parziale');
+  includes('persona parziale: cognome non trovato', paoloCard, 'Cognome non trovato');
+  includes('persona parziale: fonte', paoloCard, 'Fonte: chi-siamo');
   includes('altra persona', people, 'Giulia Rossi — Chef');
+  includes('persona senza recapiti non diventa Contatto', people, 'Non utilizzabile come Contatto HubSpot');
   check("l'autore di un articolo non è una persona rilevata", !people.includes('Paolo Neri'));
   const allData = await text('#all-data');
-  for (const part of ['PEC', '01234567897', 'PG-123456', 'IT054001C2ABCDEFGH', 'Instagram', 'Octorate', 'sede legale', 'cellulare']) includes(`tutti i dati rilevati: ${part}`, allData, part);
+  for (const part of ['PEC', '01234567897', 'PG-123456', 'IT054001C2ABCDEFGH', 'Instagram', 'Octorate', 'sede legale', 'cellulare', 'aziendale generica', 'persona parziale']) includes(`tutti i dati rilevati: ${part}`, allData, part);
   check('nessun profilo social da pulsanti «condividi»', !allData.includes('sharer'));
+  check('tutti i dati rilevati: sezione chiusa all\'inizio', !(await panel.$eval('#all-data-box', (d) => d.open)));
+  const groupOrder = await panel.$$eval('#all-data > .group > summary', (s) => s.map((x) => x.firstChild.textContent.trim()));
+  equal('tutti i dati rilevati: ordine dei gruppi', JSON.stringify(groupOrder), JSON.stringify([
+    'Email', 'Telefoni', 'WhatsApp', 'Persone', 'Indirizzi', 'Social', 'P.IVA', 'Fax', 'Nomi commerciali', 'Profili LinkedIn personali',
+    'Sistemi esterni', 'Dati legali (non usati in HubSpot)',
+  ]));
+  check('dati legali in fondo e chiusi', await panel.$eval('#all-data > .group.legal', (d) => !d.open && d === d.parentElement.lastElementChild));
+  await panel.$eval('#all-data-box', (d) => { d.open = true; });
   await shot('1-scansione-approfondita');
   await panel.bringToFront();
   for (const [i, selector] of ['#status', 'section:has(#company-fields)', 'section:has(#contact-fields)', 'section:has(#people-list)', 'section:has(#all-data)'].entries()) {
@@ -336,8 +367,11 @@ async function run(context, site) {
   check('pulsante «Usa come contatto»', await usePersonCard('Giulia Rossi'));
   equal('nuovo contatto', `${await value('contact-firstname')} ${await value('contact-lastname')}`, 'Giulia Rossi');
   includes('contatto incompleto segnalato', await text('#contact-ready'), 'manca email, telefono o LinkedIn');
+  check('contatto non valido: base giuridica nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
   await usePersonCard('Maria Bianchi');
   equal('di nuovo Maria', await value('contact-firstname'), 'Maria');
+  check('di nuovo valido: base giuridica visibile', await panel.isVisible('#contact-hs_legal_basis-field'));
+  check('cambio di persona: base giuridica da confermare di nuovo', !(await panel.isChecked('#legal-basis-confirm')));
 
   console.log('\nVerifica HubSpot (MOCK)');
   let v = await verify();
@@ -387,7 +421,7 @@ async function run(context, site) {
   equal('telefono', await value('company-phone'), '+39 0742123456');
   equal('regione', await value('company-state'), 'Umbria');
   equal('settore Agria', await value('company-settore_agria'), 'Cantina / Vitivinicolo');
-  check('tipo struttura solo per Hospitality', await panel.$eval('#company-tipo_struttura_hospitality', (s) => s.disabled && s.value === ''));
+  check('tipo struttura nascosto fuori dall\'Hospitality', await panel.isHidden('#company-tipo_struttura_hospitality-field'));
   equal('contatto: titolare', `${await value('contact-firstname')} ${await value('contact-lastname')} · ${await value('contact-jobtitle')}`, 'Mario Rossi · Titolare');
   equal('contatto: email', await value('contact-email'), 'mario.rossi@cantinarossi.test');
   equal('contatto: LinkedIn', await value('contact-hs_linkedin_url'), 'https://www.linkedin.com/in/mario-rossi-vino');
@@ -412,6 +446,68 @@ async function run(context, site) {
   equal('secondo clic: svuotato', await value('company-name'), '');
   equal('stato iniziale', await panel.getAttribute('#status', 'data-state'), 'idle');
   includes('proprietario resta dalle Impostazioni', await text('#company-hubspot_owner_id'), '123456789');
+
+  console.log('\nCaso reale La Mora: email attaccata al telefono, host senza cognome');
+  const lamora = await openTab(site('lamora-caso.test', '/'));
+  r = await deepScan(lamora);
+  equal('scansione completata', r.state, 'ok');
+  equal('riepilogo', await text('#summary'), '2 pagine · 1 email · 1 telefono · 1 WhatsApp · 1 persona');
+  equal('email principale pulita', await value('company-email_aziendale_principale'), 'agriturismolamora@gmail.com');
+  equal('nessuna email secondaria inventata', await value('company-email_aziendale_secondaria'), '');
+  check('email corrotta scartata ovunque', !(await panel.evaluate(() => document.body.innerText + [...document.querySelectorAll('input, textarea')].map((i) => i.value).join(' '))).includes('4363917agriturismolamora'));
+  equal('telefono', await value('company-phone'), '+39 393 436 3917');
+  equal('tipo struttura', await value('company-tipo_struttura_hospitality'), 'Agriturismo');
+  check('ragione sociale del fornitore non proposta come nome', !(await text('#company-name-field .alts')).includes('Studio Web'));
+  equal('contesto rapido La Mora', await value('company-hs_quick_context'), [
+    'WHATSAPP', '+39 393 436 3917', '', 'P.IVA', '01234567897', '', 'POTENZIALI CONTATTI', '- Paolo — Host (cognome non trovato)',
+  ].join('\n'));
+  const lamoraPeople = await text('#people-list');
+  for (const part of ['Paolo — Host', 'Persona parziale', 'Cognome non trovato', 'Paolo, host di Agriturismo La Mora']) includes(`persone rilevate: ${part}`, lamoraPeople, part);
+  equal('nessun Contatto automatico senza cognome', await value('contact-firstname'), '');
+  check('contatto non valido: base giuridica nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
+  includes('fornitore solo tra i dati legali', await panel.$eval('#all-data > .group.legal', (d) => d.textContent), 'Studio Web Esempio S.r.l.');
+  await shot('3-caso-la-mora');
+
+  console.log('\nCaso reale Perticaia: alias funzionali, cantina, contatto inserito a mano');
+  const perticaia = await openTab(site('perticaia-caso.test', '/'));
+  r = await deepScan(perticaia);
+  equal('scansione completata', r.state, 'ok');
+  equal('email principale', await value('company-email_aziendale_principale'), 'info@perticaia.it');
+  equal('email secondaria', await value('company-email_aziendale_secondaria'), 'visit@perticaia.it');
+  equal('telefono principale', await value('company-phone'), '+39 0742379014');
+  equal('settore', await value('company-settore_agria'), 'Cantina / Vitivinicolo');
+  check('tipo struttura nascosto (cantina)', await panel.isHidden('#company-tipo_struttura_hospitality-field'));
+  const visitTag = await panel.evaluate(() => [...document.querySelectorAll('#all-data .facts li')].find((li) => li.querySelector('.v')?.textContent === 'visit@perticaia.it')?.textContent || '');
+  includes('visit@ classificata come aziendale generica', visitTag, 'aziendale generica');
+  includes('nessuna persona da visit@', await text('#people-list'), 'Nessuna persona');
+  equal('contesto rapido Perticaia', await value('company-hs_quick_context'), [
+    'WHATSAPP', '+39 376 255 3216', '', 'P.IVA', '12345678903', '',
+    'ALTRI CANALI', '- Instagram: https://www.instagram.com/perticaia/', '- Facebook: https://www.facebook.com/perticaia',
+  ].join('\n'));
+  // settore cambiato a mano: il tipo di struttura compare solo per l'Hospitality
+  await panel.selectOption('#company-settore_agria', 'Hospitality');
+  check('settore Hospitality: tipo struttura di nuovo visibile', await panel.isVisible('#company-tipo_struttura_hospitality-field'));
+  await panel.selectOption('#company-settore_agria', 'Cantina / Vitivinicolo');
+  check('settore Cantina: tipo struttura di nuovo nascosto', await panel.isHidden('#company-tipo_struttura_hospitality-field'));
+  // contatto inserito a mano: la base giuridica compare solo quando è valido
+  check('nessun contatto: base giuridica nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
+  await panel.fill('#contact-firstname', 'Anna');
+  await panel.fill('#contact-lastname', 'Verdi');
+  check('nome e cognome senza recapito: ancora nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
+  await panel.fill('#contact-email', 'anna.verdi@perticaia.it');
+  check('contatto valido: base giuridica visibile', await panel.isVisible('#contact-hs_legal_basis-field'));
+  check('base giuridica da confermare', !(await panel.isChecked('#legal-basis-confirm')));
+  await panel.check('#legal-basis-confirm');
+  includes('base giuridica confermata', await text('#contact-hs_legal_basis-meta'), 'Confermata');
+  await panel.fill('#contact-email', '');
+  check('contatto di nuovo incompleto: base giuridica nascosta', await panel.isHidden('#contact-hs_legal_basis-field'));
+  check('conferma tolta', !(await panel.isChecked('#legal-basis-confirm')));
+  await shot('4-caso-perticaia');
+
+  console.log('\nImpostazioni: «← Torna ad Agria Scout»');
+  const closing = options.waitForEvent('close', { timeout: 10000 }).then(() => true, () => false);
+  await options.click('#back').catch(() => {}); // la scheda si chiude durante il clic
+  check('la scheda delle Impostazioni si chiude e si torna al pannello', await closing);
 
   console.log("\nErrori nelle pagine dell'estensione");
   check('nessun errore JavaScript', errors.length === 0, errors.join(' | '));

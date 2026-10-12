@@ -83,7 +83,9 @@ test('senza dati strutturati: titolo, link, footer e persone dal testo', () => {
     },
   }, 'contact');
   assert.equal(r.c.name, 'Cantina Rossi');
-  assert.ok(r.company.name.alternatives.includes('Cantina Rossi S.r.l.'), 'ragione sociale dal copyright come alternativa');
+  // la ragione sociale resta tra i dati rilevati, ma non si propone per HubSpot (Milestone 1.1.1)
+  assert.ok(r.facts('legalName').some((f) => f.value === 'Cantina Rossi S.r.l.'), 'ragione sociale rilevata');
+  assert.ok(!r.company.name.alternatives.includes('Cantina Rossi S.r.l.'), 'ragione sociale non proposta come nome');
   assert.equal(r.c.email_aziendale_principale, 'info@cantinarossi.it');
   assert.equal(r.c.phone, '+39 0742123456');
   assert.equal(r.facts('address')[0].value, 'Via Roma, 12, 06034 Foligno (PG)');
