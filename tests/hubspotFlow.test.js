@@ -324,10 +324,14 @@ test('contatto non valido: niente richieste', async () => {
   assert.deepEqual(contactPayload({ firstname: 'Anna', lastname: 'Neri', hs_linkedin_url: 'https://www.linkedin.com/in/anna-neri' }, MATTEO).errors, [], 'basta il LinkedIn');
 });
 
-test('base giuridica: non confermata → non inviata; confermata → inviata', async () => {
+test('base giuridica: non confermata → Contatto non creato, niente inviato; confermata → inviata', async () => {
   const no = await createdCompany();
-  await no.call('createContact', { contact: CONTACT, companyId: no.companyId, legalBasisConfirmed: false });
-  assert.ok(!('hs_legal_basis' in no.posts(CONTACTS)[0].body.properties));
+  for (const flag of [false, undefined, 'sì']) {
+    const res = await no.call('createContact', { contact: CONTACT, companyId: no.companyId, legalBasisConfirmed: flag });
+    assert.deepEqual([res.ok, res.error.code, res.error.message], [false, 'legal_basis', 'Conferma la base giuridica per poter creare il Contatto in HubSpot.'], String(flag));
+  }
+  assert.equal(no.posts(CONTACTS).length, 0, 'nessuna scrittura senza base giuridica');
+  assert.equal(no.fake.state.requests.filter((r) => r.path.includes('/contacts')).length, 0, 'nemmeno la ricerca dei contatti');
   const yes = await createdCompany();
   await yes.call('createContact', { contact: CONTACT, companyId: yes.companyId, legalBasisConfirmed: true });
   assert.equal(yes.posts(CONTACTS)[0].body.properties.hs_legal_basis, 'Legitimate interest – prospect/lead');
@@ -351,11 +355,11 @@ test('azienda creata + contatto fallito: la bozza tiene l\'azienda, il nuovo ten
 test('contatto creato ma associazione fallita: si riprova solo l\'associazione', async () => {
   const { fake, call, companyId, posts } = await createdCompany();
   fake.force('PUT', /associations/, fake.response.error(503, 'down'));
-  const partial = await call('createContact', { contact: CONTACT, companyId });
+  const partial = await call('createContact', { contact: CONTACT, companyId, legalBasisConfirmed: true });
   assert.deepEqual([partial.outcome, partial.contact.associated], ['partial', false]);
   assert.match(partial.error.message, /errore 503/);
   // un nuovo clic su «Crea» non crea un secondo contatto
-  assert.equal((await call('createContact', { contact: CONTACT, companyId })).outcome, 'exists');
+  assert.equal((await call('createContact', { contact: CONTACT, companyId, legalBasisConfirmed: true })).outcome, 'exists');
   const done = await call('associateContact', { contactId: partial.contact.id, companyId });
   assert.equal(done.outcome, 'associated');
   assert.equal(posts(CONTACTS).length, 1);
@@ -368,13 +372,13 @@ test('azienda già presente + nuovo contatto: creato e associato a quell\'aziend
   const { fake, call, posts } = await setup();
   const id = fake.addCompany({ name: 'Cantina Rossi', domain: 'cantinarossi.it', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'IN_PROGRESS' });
   await call('verifyCompany', { company: COMPANY });
-  const res = await call('createContact', { contact: CONTACT, companyId: id });
+  const res = await call('createContact', { contact: CONTACT, companyId: id, legalBasisConfirmed: true });
   assert.equal(res.outcome, 'created');
   assert.deepEqual(fake.state.associations, [{ contactId: res.contact.id, companyId: id }]);
   assert.equal(posts(COMPANIES).length, 0);
   assert.deepEqual(fake.state.companies[0].properties, { name: 'Cantina Rossi', domain: 'cantinarossi.it', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'IN_PROGRESS' });
   // solo verso aziende verificate o create in questa sessione
-  assert.equal((await call('createContact', { contact: { ...CONTACT, email: 'altro@x.it' }, companyId: '424242' })).error.code, 'invalid_input');
+  assert.equal((await call('createContact', { contact: { ...CONTACT, email: 'altro@x.it' }, companyId: '424242', legalBasisConfirmed: true })).error.code, 'invalid_input');
 });
 
 test('senza commerciale attivo nessuna operazione CRM', async () => {
@@ -414,7 +418,7 @@ test('MOCK: stesso flusso simulato, nessuna rete e nessuna chiave', async () => 
   const created = await absent.call('createCompany', { company: COMPANY });
   assert.deepEqual([created.outcome, created.mock], ['created', true]);
   assert.match(created.company.id, /^MOCK-/);
-  const contact = await absent.call('createContact', { contact: CONTACT, companyId: created.company.id });
+  const contact = await absent.call('createContact', { contact: CONTACT, companyId: created.company.id, legalBasisConfirmed: true });
   assert.deepEqual([contact.outcome, contact.contact.associated], ['created', true]);
   assert.equal(absent.fake.state.requests.length, 0);
 
@@ -490,4 +494,21 @@ test('stesso sito + nome diverso: possibile duplicato, si crea solo dopo la conf
   assert.deepEqual([res.outcome, res.matches[0].level, res.matches[0].reasons], ['possible', 'strong', ['website']]);
   assert.equal((await call('createCompany', { company: POGGIO, acknowledged: [id] })).outcome, 'created');
   assert.equal(posts(COMPANIES).length, 1);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Patch 2.0.4: la base giuridica serve solo a creare un Contatto
+
+test('Verifica HubSpot disponibile senza base giuridica; Crea Contatto bloccato finché non è confermata', async () => {
+  const { call, posts } = await setup();
+  const verify = await call('verifyCompany', { company: COMPANY });
+  assert.deepEqual([verify.ok, verify.outcome], [true, 'none'], 'nessuna base giuridica richiesta per verificare');
+  const company = await call('createCompany', { company: COMPANY });
+  assert.equal(company.outcome, 'created', 'nemmeno per creare l\'Azienda');
+  const blocked = await call('createContact', { contact: CONTACT, companyId: company.company.id });
+  assert.deepEqual([blocked.error.code, blocked.error.message], ['legal_basis', 'Conferma la base giuridica per poter creare il Contatto in HubSpot.']);
+  assert.equal(posts(CONTACTS).length, 0);
+  const created = await call('createContact', { contact: CONTACT, companyId: company.company.id, legalBasisConfirmed: true });
+  assert.equal(created.outcome, 'created');
+  assert.equal(posts(CONTACTS)[0].body.properties.hs_legal_basis, 'Legitimate interest – prospect/lead');
 });

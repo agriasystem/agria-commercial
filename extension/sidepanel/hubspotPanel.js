@@ -7,7 +7,8 @@
 
 import { el } from './render.js';
 import {
-  clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, preflightCompany, updateHubspot,
+  clearContactCheck, clearVerification, contactReady, crmRecords, hubspotState, hubspotTarget, legalBasisEffective, preflightCompany,
+  updateHubspot,
 } from '../lib/draft.js';
 import { leadStatusLabel } from '../lib/crmModel.js';
 import { MOCK_SCENARIOS } from '../lib/config.js';
@@ -58,7 +59,7 @@ function preview(properties) {
  * $: selettore; getDraft/setDraft: la bozza del pannello (setDraft salva); getOperator: commerciale
  * attivo; needsOperator: apre la scelta del commerciale se manca (true = fermarsi).
  */
-export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOperator }) {
+export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSessionLegalBasis = () => false, needsOperator }) {
   let status = { mode: 'mock', mockScenario: 'not_found', ready: true, blocker: '', keyConfigured: false, connection: { state: 'untested' } };
   let busy = ''; // '' | 'verify' | 'company' | 'contact' | 'associate'
   let verifyError = null; // { code, message } dell'ultima verifica non riuscita
@@ -109,8 +110,10 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
     busy = 'contact';
     render();
     const draft = getDraft();
+    const sessionLegalBasis = getSessionLegalBasis();
     const res = await call('createContact', {
-      contact: crmRecords(draft, getOperator()).contact, legalBasisConfirmed: draft.legalBasisConfirmed, companyId: target.id, companyName: target.name,
+      contact: crmRecords(draft, getOperator(), { sessionLegalBasis }).contact,
+      legalBasisConfirmed: legalBasisEffective(draft, sessionLegalBasis), companyId: target.id, companyName: target.name,
     });
     busy = '';
     if (!res.ok) update({ contactError: res.error.message });
@@ -252,9 +255,11 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
     } else if (!contactReady(draft)) {
       children.push(el('p', { class: 'hint' }, 'Per creare il Contatto servono nome, cognome e almeno un recapito (email, telefono o LinkedIn): compila il form Contatto.'));
     } else {
-      const { properties, errors } = contactPayload(crmRecords(draft, getOperator()).contact, getOperator(), { legalBasisConfirmed: draft.legalBasisConfirmed });
+      const legalBasis = legalBasisEffective(draft, getSessionLegalBasis());
+      const { properties, errors } = contactPayload(crmRecords(draft, getOperator(), { sessionLegalBasis: getSessionLegalBasis() }).contact, getOperator(), { legalBasisConfirmed: legalBasis });
       children.push(el('p', { class: 'hint' }, 'Prima della creazione Scout cerca il contatto in HubSpot (email, telefono, cellulare, LinkedIn). Verranno scritti questi dati:'), preview(properties));
-      if (!draft.legalBasisConfirmed) children.push(el('p', { class: 'meta' }, 'Base giuridica non confermata: non verrà inviata.'));
+      // la base giuridica serve solo a creare il Contatto: la verifica HubSpot resta sempre possibile
+      if (!legalBasis) children.push(el('p', { id: 'legal-basis-required', class: 'result', 'data-kind': 'warn' }, 'Conferma la base giuridica per poter creare il Contatto in HubSpot.'));
       if (errors.length) children.push(el('div', { class: 'result', 'data-kind': 'warn' }, el('strong', {}, 'Da correggere prima della creazione'), ...errors.map((e) => el('p', {}, e))));
       if (st.contactError) {
         children.push(el('div', { class: 'result', 'data-kind': 'error' },
@@ -262,7 +267,7 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, needsOp
           el('strong', {}, '⚠ Contatto non creato'), ...lines(st.contactError)));
       }
       const label = st.contactError ? 'Riprova creazione Contatto' : target.existing ? 'Crea Contatto e associa a questa Azienda' : 'Crea Contatto e associa';
-      children.push(el('button', { id: 'create-contact', class: 'btn primary wide', type: 'button', disabled: Boolean(busy) || !status.ready || errors.length > 0, onclick: onCreateContact },
+      children.push(el('button', { id: 'create-contact', class: 'btn primary wide', type: 'button', disabled: Boolean(busy) || !status.ready || errors.length > 0 || !legalBasis, onclick: onCreateContact },
         busy === 'contact' ? 'Creazione in corso…' : label));
     }
     box.replaceChildren(...children);

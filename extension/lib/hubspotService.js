@@ -34,6 +34,7 @@ export const MESSAGES = Object.freeze({
   certain: 'Azienda già presente in HubSpot: la creazione è bloccata.',
   unconfirmed: 'Possibile azienda già presente: conferma di aver controllato prima di creare.',
   notVerified: 'Premi prima «Verifica HubSpot»: la creazione parte solo dopo il controllo dei doppioni.',
+  legalBasis: 'Conferma la base giuridica per poter creare il Contatto in HubSpot.',
   busy: 'Operazione già in corso: attendi la risposta di HubSpot.',
   keyFormat: 'La Service Key non sembra valida: copiala di nuovo da HubSpot (Sviluppo → Chiavi → Service key).',
 });
@@ -269,6 +270,8 @@ export function createHubspotService({
       const values = record(contact, CONTACT_FIELD_NAMES);
       const { properties, errors } = contactPayload(values, operator, { legalBasisConfirmed: legalBasisConfirmed === true });
       if (errors.length) throw new HubspotError('invalid_input', `Dati da correggere prima della creazione:\n- ${errors.join('\n- ')}`);
+      // la base giuridica serve per creare un Contatto (non per verificare): senza conferma niente scrittura
+      if (legalBasisConfirmed !== true) throw new HubspotError('legal_basis', MESSAGES.legalBasis);
       const { api, mock } = await client();
       const mode = mock ? 'mock' : 'real';
       const target = String(companyId ?? '');

@@ -27,6 +27,13 @@
 
   <div id="app" class="stack" hidden>
   <p id="active-user" class="who">Commerciale attivo: <strong id="active-name"></strong> · <button id="change-operator" class="linkbtn" type="button">Cambia</button></p>
+  <!-- vale solo per questa sessione di Chrome e per il commerciale attivo: serve a creare Contatti, non a verificare -->
+  <section id="session-legal" class="card session-legal" aria-labelledby="session-legal-title">
+    <h2 id="session-legal-title" class="eyebrow">Base giuridica predefinita per i nuovi prospect</h2>
+    <p id="session-legal-value" class="session-legal-value"></p>
+    <label class="confirm"><input id="session-legal-basis" type="checkbox"> Usa questa base giuridica per i nuovi contatti prospect in questa sessione</label>
+    <p class="meta">Solo per questa sessione di Chrome e per il commerciale attivo. Per il singolo contatto si cambia nel form Contatto.</p>
+  </section>
   <section id="status" class="card status" data-state="idle" aria-labelledby="status-title">
     <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
     <div aria-live="polite">

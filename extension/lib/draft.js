@@ -5,7 +5,8 @@
 // Regole: un campo corretto a mano non viene mai sovrascritto; i campi non toccati si
 // ricalcolano dai dati di TUTTE le pagine analizzate; un sito diverso è un nuovo prospect.
 // La base giuridica si conferma solo per un Contatto valido, e va confermata di nuovo se il
-// contatto cambia persona o smette di essere valido.
+// contatto cambia persona o smette di essere valido. Con la base predefinita di sessione
+// (legalBasisSession.js) il Contatto la eredita, salvo una scelta diversa per quel contatto.
 // Il proprietario HubSpot non sta nella bozza: è sempre il commerciale attivo (vedi crmRecords),
 // così cambiando commerciale Azienda e Contatto passano subito al nuovo owner.
 // La bozza conserva invece l'esito di HubSpot (verifica, ID dell'Azienda e del Contatto creati),
@@ -39,7 +40,8 @@ export function emptyDraft() {
     contact: blankFields(CONTACT_PROPS),
     mainPerson: null,
     mainPersonChosen: false,
-    legalBasisConfirmed: false,
+    legalBasisConfirmed: false, // confermata per questo contatto
+    legalBasisDeclined: false, // esclusa per questo contatto (anche se c'è la base predefinita di sessione)
     hubspot: { mock: emptyHubspotState(), real: emptyHubspotState() },
   };
 }
@@ -142,8 +144,17 @@ function updateQuickContext(draft) {
 export const contactReady = (draft) => isContactReady(valuesOf(draft.contact));
 
 function syncLegalBasis(draft) {
-  if (!contactReady(draft)) draft.legalBasisConfirmed = false;
+  if (contactReady(draft)) return;
+  draft.legalBasisConfirmed = false;
+  draft.legalBasisDeclined = false;
 }
+
+/**
+ * Base giuridica da usare per questo Contatto: serve un Contatto valido e una conferma, per il singolo
+ * contatto o come predefinita di sessione (sessionDefault); una scelta contraria per il contatto vince.
+ */
+export const legalBasisEffective = (draft, sessionDefault = false) => contactReady(draft)
+  && draft.legalBasisDeclined !== true && (draft.legalBasisConfirmed === true || sessionDefault === true);
 
 // valori scelti a mano che cambiano le altre proposte (email già usate, settore per il tipo di struttura)
 function fixedOf(draft) {
@@ -206,17 +217,21 @@ export function pickAlternative(draft, section, name, value) {
 export function usePerson(draft, key) {
   if (!peopleOf(draft.site).some((p) => p.key === key)) return draft;
   const next = structuredClone(draft);
-  // la conferma della base giuridica valeva per la persona di prima
-  if (next.mainPerson !== key) next.legalBasisConfirmed = false;
+  // la scelta sulla base giuridica valeva per la persona di prima
+  if (next.mainPerson !== key) Object.assign(next, { legalBasisConfirmed: false, legalBasisDeclined: false });
   next.mainPerson = key;
   next.mainPersonChosen = true;
   for (const field of Object.values(next.contact)) field.edited = false;
   return refreshForms(next);
 }
 
-/** Conferma della base giuridica: possibile solo per un Contatto valido. */
+/**
+ * Scelta del commerciale per questo Contatto (solo se valido): true conferma la base giuridica, false la
+ * esclude anche se c'è quella predefinita di sessione.
+ */
 export function setLegalBasisConfirmed(draft, confirmed) {
-  return { ...structuredClone(draft), legalBasisConfirmed: confirmed === true && contactReady(draft) };
+  const ready = contactReady(draft);
+  return { ...structuredClone(draft), legalBasisConfirmed: confirmed === true && ready, legalBasisDeclined: confirmed !== true && ready };
 }
 
 /** Rigenera il contesto rapido, scartando le modifiche a mano. */
@@ -253,6 +268,7 @@ export function restoreDraft(raw) {
     draft.mainPerson = typeof raw.mainPerson === 'string' && draft.site.people[raw.mainPerson] ? raw.mainPerson : null;
     draft.mainPersonChosen = raw.mainPersonChosen === true && Boolean(draft.mainPerson);
     draft.legalBasisConfirmed = raw.legalBasisConfirmed === true && contactReady(draft);
+    draft.legalBasisDeclined = raw.legalBasisDeclined === true && contactReady(draft);
     draft.hubspot = { mock: restoreHubspotState(raw.hubspot?.mock), real: restoreHubspotState(raw.hubspot?.real) };
     return draft;
   } catch {
@@ -283,14 +299,15 @@ export function preflightCompany(draft, operator) {
 /**
  * Azienda e Contatto come proprietà HubSpot, pronti per la scrittura (fase successiva): i valori dei
  * form, solo i campi visibili (niente tipo di struttura fuori dall'Hospitality), la base giuridica
- * solo se confermata e hubspot_owner_id preso SOLO dal commerciale attivo. Senza commerciale attivo
- * non si prepara nulla.
+ * solo se confermata (per il contatto o come predefinita di sessione: sessionLegalBasis) e
+ * hubspot_owner_id preso SOLO dal commerciale attivo. Senza commerciale attivo non si prepara nulla.
  */
-export function crmRecords(draft, operator) {
+export function crmRecords(draft, operator, { sessionLegalBasis = false } = {}) {
   const { hubspotOwnerId } = requireOperator(operator);
+  const legalBasis = legalBasisEffective(draft, sessionLegalBasis);
   const valueFor = (p, values) => {
     if (p.input === 'owner') return hubspotOwnerId;
-    if (p.input === 'legalBasis') return draft.legalBasisConfirmed ? values[p.name] : '';
+    if (p.input === 'legalBasis') return legalBasis ? values[p.name] : '';
     return values[p.name];
   };
   const record = (section, props) => {

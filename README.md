@@ -186,8 +186,16 @@ impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo
    indirizzi, social, P.IVA, poi gli altri dati; ragione sociale, codice fiscale, REA, CIN e SDI in
    fondo, in «Dati legali (non usati in HubSpot)».
 6. La **base giuridica** compare quando il Contatto è valido: si conferma a mano, e va confermata
-   di nuovo se cambia la persona o il contatto smette di essere valido. Se serve, correggi il
-   **contesto rapido**.
+   di nuovo se cambia la persona o il contatto smette di essere valido. Per non ripeterla a ogni
+   prospect, dopo la scelta del commerciale c'è **«Base giuridica predefinita per i nuovi prospect»**
+   (Legitimate interest – prospect/lead) con la casella «Usa questa base giuridica per i nuovi contatti
+   prospect in questa sessione»: ogni nuovo Contatto valido la eredita («Predefinita per questa
+   sessione») e si può togliere o riconfermare per il singolo contatto. Vale solo per la sessione di
+   Chrome (`chrome.storage.session`) e per il commerciale che l'ha confermata: cambiando commerciale va
+   confermata di nuovo. Serve solo a **creare** un Contatto: «Verifica HubSpot» funziona sempre, e senza
+   base giuridica confermata «Crea Contatto…» resta disattivato con «Conferma la base giuridica per
+   poter creare il Contatto in HubSpot.» (il blocco vale anche nel service worker). Se serve,
+   correggi il **contesto rapido**.
 7. **Verifica HubSpot**, poi, se l'azienda non c'è, **Crea Azienda in HubSpot** e **Crea Contatto e
    associa** (vedi *Flusso HubSpot*). In MOCK tutto è simulato.
 
@@ -215,8 +223,8 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
   nuovo owner. `crmRecords(draft, commerciale)` (in `lib/draft.js`) prepara le proprietà da inviare
   a HubSpot con l'owner del commerciale attivo, solo i campi visibili e la base giuridica solo se
   confermata; senza commerciale attivo si ferma con un errore.
-- `hs_legal_basis`: suggerito «Legitimate interest – prospect/lead», da confermare a mano, solo
-  per un Contatto valido.
+- `hs_legal_basis`: «Legitimate interest – prospect/lead», confermata per il singolo Contatto o
+  come predefinita della sessione; senza conferma il Contatto non si crea e la proprietà non si invia.
 - Nome azienda: la ragione sociale non viene proposta (resta tra i dati legali rilevati).
 - Persone: un candidato che contiene parole del lessico privacy/legale (modalità, trattamento, dati
   personali, categorie, finalità, base giuridica, interessato, diritti, periodo di conservazione,

@@ -235,6 +235,11 @@ async function run(context, site, fake) {
   equal('proprietario Contatto = commerciale attivo', await text('#contact-hubspot_owner_id'), ownerText(MATTEO));
   includes('proprietario: fonte dichiarata', await text('#company-hubspot_owner_id-meta'), 'Commerciale attivo');
   equal('scelta salvata solo per la sessione', await panel.evaluate(() => chrome.storage.session.get('activeOperator').then((r) => r.activeOperator)), MATTEO.hubspotOwnerId);
+  check('«Base giuridica predefinita per i nuovi prospect» dopo la scelta del commerciale', await panel.isVisible('#session-legal'));
+  equal('base predefinita: valore', await text('#session-legal-value'), 'Legitimate interest – prospect/lead');
+  includes('base predefinita: casella', await text('#session-legal'), 'Usa questa base giuridica per i nuovi contatti prospect in questa sessione');
+  check('base predefinita: non attiva finché il commerciale non la conferma', !(await panel.isChecked('#session-legal-basis')));
+  await panel.locator('#session-legal').screenshot({ path: path.join(OUT, '0b-base-giuridica-sessione.png') });
   check('nulla nelle impostazioni permanenti', !JSON.stringify(await panel.evaluate(() => chrome.storage.local.get(null))).includes(MATTEO.hubspotOwnerId));
 
   console.log('\nImpostazioni: commerciali disponibili, limite pagine, salvataggio automatico');
@@ -762,6 +767,24 @@ async function run(context, site, fake) {
   equal('«Apri in HubSpot»: link dato dall\'API', await panel.$eval('#verify-result a.src', (a) => a.href), `https://app-eu1.hubspot.com/contacts/149362651/record/0-2/${existingCompany}`);
   check('nessuna possibilità di creare un doppione certo', await panel.isHidden('#company-step') && !(await panel.$('#create-company')));
   equal('contatto per l\'azienda esistente', (await text('#create-contact')).trim(), 'Crea Contatto e associa a questa Azienda');
+  // base giuridica: serve solo per creare il Contatto, la verifica funziona comunque
+  check('senza base giuridica: Verifica HubSpot disponibile', await panel.isEnabled('#verify'));
+  check('senza base giuridica: «Crea Contatto» disattivato', await panel.isDisabled('#create-contact'));
+  equal('senza base giuridica: messaggio', (await text('#legal-basis-required')).trim(), 'Conferma la base giuridica per poter creare il Contatto in HubSpot.');
+  await panel.check('#session-legal-basis');
+  await panel.waitForFunction(() => !document.querySelector('#legal-basis-required'), null, { timeout: 5000 }).catch(() => {});
+  check('base di sessione confermata: «Crea Contatto» attivo', await panel.isEnabled('#create-contact'));
+  includes('form Contatto: base ereditata', await text('#contact-hs_legal_basis-meta'), 'Predefinita per questa sessione');
+  check('form Contatto: casella spuntata dalla base di sessione', await panel.isChecked('#legal-basis-confirm'));
+  equal('salvata solo per la sessione', await panel.evaluate(() => chrome.storage.session.get('legalBasisDefault').then((r) => r.legalBasisDefault?.operatorId)), ALESSANDRO.hubspotOwnerId);
+  check('mai nelle impostazioni permanenti', !JSON.stringify(await panel.evaluate(() => chrome.storage.local.get(null))).includes('legalBasis'));
+  // scelta per il singolo contatto
+  await panel.uncheck('#legal-basis-confirm');
+  includes('singolo contatto: esclusa', await text('#contact-hs_legal_basis-meta'), 'Non usata per questo contatto');
+  check('singolo contatto escluso: «Crea Contatto» disattivato', await panel.isDisabled('#create-contact'));
+  await panel.check('#legal-basis-confirm');
+  includes('singolo contatto: confermata di nuovo', await text('#contact-hs_legal_basis-meta'), 'Confermata');
+  check('di nuovo attivo', await panel.isEnabled('#create-contact'));
   await press('#create-contact');
   await panel.waitForFunction(() => document.querySelector('#contact-step').textContent.includes('Contatto già presente in HubSpot'), null, { timeout: 15000 });
   const contactExists = await text('#contact-step');
@@ -839,6 +862,14 @@ async function run(context, site, fake) {
   check('chiave rimossa: «Configura la Service Key nelle Impostazioni.»', await blockerIs('Configura la Service Key nelle Impostazioni.'), await blocker());
   check('ogni richiesta verso HubSpot è passata dal finto server', fake.state.requests.length > 0);
   check('solo endpoint 2026-09', fake.state.requests.every((q) => q.path.startsWith('/crm/objects/2026-09/')), JSON.stringify(fake.state.requests.map((q) => q.path)));
+
+  console.log('\nBase giuridica di sessione: il cambio di commerciale la azzera');
+  check('base di sessione attiva prima del cambio', await panel.isChecked('#session-legal-basis'));
+  await panel.click('#change-operator');
+  await panel.click(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"]`);
+  await panel.waitForFunction(() => !document.querySelector('#session-legal-basis').checked, null, { timeout: 5000 }).catch(() => {});
+  check('nuovo commerciale: base da confermare di nuovo', !(await panel.isChecked('#session-legal-basis')));
+  equal('nessuna conferma in sessione', await panel.evaluate(() => chrome.storage.session.get('legalBasisDefault').then((r) => r.legalBasisDefault ?? null)), null);
 
   console.log('\nImpostazioni: «← Torna ad Agria Scout»');
   const closing = options.waitForEvent('close', { timeout: 10000 }).then(() => true, () => false);

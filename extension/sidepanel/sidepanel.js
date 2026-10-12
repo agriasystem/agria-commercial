@@ -8,11 +8,12 @@ import { pageTypeOf } from '../lib/discovery.js';
 import { fetchText } from '../lib/fetchPage.js';
 import { scanSite } from '../lib/scanner.js';
 import { factsOf, summaryOf } from '../lib/siteData.js';
-import { COMPANY_PROPS, CONTACT_PROPS, isPropVisible, LEAD_STATUS } from '../lib/crmModel.js';
+import { COMPANY_PROPS, CONTACT_PROPS, isPropVisible, LEAD_STATUS, LEGAL_BASIS } from '../lib/crmModel.js';
 import {
   applyFindings, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
-  restoreDraft, setLegalBasisConfirmed, usePerson,
+  legalBasisEffective, restoreDraft, setLegalBasisConfirmed, usePerson,
 } from '../lib/draft.js';
+import { clearSessionLegalBasis, loadSessionLegalBasis, onSessionLegalBasisChange, setSessionLegalBasis } from '../lib/legalBasisSession.js';
 import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normalizeUrl } from '../lib/validation.js';
 import { loadConfig, normalizeConfig, onConfigChange } from '../lib/config.js';
 import { loadActiveOperator, onOperatorChange, OPERATORS, selectOperator } from '../lib/operators.js';
@@ -43,6 +44,7 @@ const valuesOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, 
 let draft = emptyDraft();
 let config = normalizeConfig(null);
 let operator = null; // commerciale attivo (operators.js): l'unica fonte di hubspot_owner_id
+let sessionLegalBasis = false; // base giuridica predefinita confermata per questa sessione e questo commerciale
 let busy = ''; // '' | 'scan' | 'analyze'
 let scanController = null;
 let hub = null; // sezione HubSpot (hubspotPanel.js)
@@ -80,8 +82,9 @@ function buildForms() {
       if (prop.input === 'legalBasis') {
         const box2 = el('input', { id: 'legal-basis-confirm', type: 'checkbox' });
         box2.addEventListener('change', () => {
+          // scelta per questo contatto: vale anche contro la base predefinita di sessione
           draft = setLegalBasisConfirmed(draft, box2.checked);
-          box2.checked = draft.legalBasisConfirmed;
+          box2.checked = legalBasisEffective(draft, sessionLegalBasis);
           renderMeta('contact', prop);
           hub.render();
           scheduleSave();
@@ -114,9 +117,11 @@ function renderMeta(section, prop, { typing = false } = {}) {
     return;
   }
   if (prop.input === 'legalBasis') {
-    meta.replaceChildren(draft.legalBasisConfirmed
-      ? el('span', { class: 'chip high' }, 'Confermata')
-      : el('span', { class: 'chip check' }, 'Valore suggerito: da confermare'));
+    let chip = el('span', { class: 'chip check' }, 'Valore suggerito: da confermare');
+    if (draft.legalBasisConfirmed) chip = el('span', { class: 'chip high' }, 'Confermata');
+    else if (legalBasisEffective(draft, sessionLegalBasis)) chip = el('span', { class: 'chip high' }, 'Predefinita per questa sessione');
+    else if (sessionLegalBasis && draft.legalBasisDeclined) chip = el('span', { class: 'chip check' }, 'Non usata per questo contatto');
+    meta.replaceChildren(chip);
     return;
   }
   const invalid = typing ? '' : invalidMessage(prop, field);
@@ -142,7 +147,7 @@ function renderField(section, prop) {
   } else if (control.value !== field.value) {
     control.value = prop.input === 'select' && !prop.options.includes(field.value) ? '' : field.value;
   }
-  if (prop.input === 'legalBasis') $('#legal-basis-confirm').checked = draft.legalBasisConfirmed;
+  if (prop.input === 'legalBasis') $('#legal-basis-confirm').checked = legalBasisEffective(draft, sessionLegalBasis);
   // campi che valgono solo in certi casi (tipo di struttura: solo Hospitality): nascosti del tutto
   if (prop.visibleIf) $(`#${section}-${prop.name}-field`).hidden = !isPropVisible(prop, valuesOf(draft[section]));
   renderMeta(section, prop);
@@ -163,7 +168,7 @@ function renderReadiness() {
   box.dataset.ready = ready ? 'yes' : 'no';
   $('#contact-hs_legal_basis-field').hidden = !ready;
   $('#legal-basis-confirm').disabled = !ready;
-  $('#legal-basis-confirm').checked = draft.legalBasisConfirmed;
+  $('#legal-basis-confirm').checked = legalBasisEffective(draft, sessionLegalBasis);
   renderMeta('contact', PROPS.contact.find((p) => p.input === 'legalBasis'));
 }
 
@@ -400,14 +405,38 @@ function applyOperator(next) {
   for (const [section, props] of Object.entries(PROPS)) for (const prop of props) if (prop.input === 'owner') renderOwner(section, prop);
   showPicker(false);
   hub.render(); // l'anteprima HubSpot mostra il nuovo proprietario
+  refreshSessionLegalBasis(); // la base predefinita vale solo per il commerciale che l'ha confermata
 }
 
 async function onPickOperator(id) {
   try {
-    applyOperator(await selectOperator(id));
+    const previous = operator?.hubspotOwnerId || '';
+    const next = await selectOperator(id);
+    // nuovo commerciale, nuova sessione operatore: la base giuridica va confermata di nuovo
+    if (previous !== next.hubspotOwnerId) await clearSessionLegalBasis();
+    applyOperator(next);
   } catch (err) {
     $('#operator-error').textContent = `Scelta non salvata: ${err?.message || err}`;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// base giuridica predefinita per i nuovi prospect (solo sessione di Chrome, solo questo commerciale)
+
+async function refreshSessionLegalBasis() {
+  sessionLegalBasis = await loadSessionLegalBasis(operator).catch(() => false);
+  $('#session-legal-basis').checked = sessionLegalBasis;
+  renderReadiness();
+  hub.render();
+}
+
+function buildSessionLegalBasis() {
+  $('#session-legal-value').textContent = LEGAL_BASIS;
+  $('#session-legal-basis').addEventListener('change', async (event) => {
+    await setSessionLegalBasis(operator, event.target.checked).catch(() => {});
+    await refreshSessionLegalBasis();
+  });
+  onSessionLegalBasisChange(refreshSessionLegalBasis); // anche da un altro pannello della sessione
 }
 
 // senza commerciale attivo niente scansione, verifica HubSpot o operazioni CRM
@@ -436,8 +465,10 @@ async function init() {
       scheduleSave();
     },
     getOperator: () => operator,
+    getSessionLegalBasis: () => sessionLegalBasis,
     needsOperator,
   });
+  buildSessionLegalBasis();
   onConfigChange((next) => {
     // un altro scenario MOCK o un'altra modalità: la verifica fatta prima non vale più
     if (next.hubspot.mode !== config.hubspot.mode || next.hubspot.mockScenario !== config.hubspot.mockScenario) hub.dataChanged();

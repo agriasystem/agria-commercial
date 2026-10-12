@@ -156,6 +156,12 @@ h1,h2,h3{margin:0;font-size:inherit}
 .person-src{color:var(--muted)}
 .person-main{color:var(--accent);font-weight:700}
 .chip.suggested{background:var(--info-bg);color:var(--info)}
+.session-legal{padding:12px 14px}
+.session-legal .eyebrow{margin-bottom:6px}
+.session-legal-value{margin:0 0 6px;font-weight:700;font-size:13px}
+.session-legal label.confirm{display:flex;gap:6px;align-items:flex-start;font-size:12.5px;font-weight:600}
+.session-legal label.confirm input{margin-top:2px;accent-color:var(--accent)}
+.session-legal .meta{margin-top:6px}
 .signals{display:flex;flex-direction:column;gap:2px;font-size:12px}
 .signals-title{margin:0;font-weight:700;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
 .signals ul{margin:0;padding-left:16px}
