@@ -72,9 +72,15 @@ test('ogni import punta a un file esistente', () => {
   }
 });
 
-test('il content script iniettato dal pannello esiste', () => {
-  const ref = read('sidepanel/pageReader.js').match(/COLLECTOR = '([^']+)'/)[1];
-  assert.ok(exists(ref), ref);
+test('il content script è una funzione autosufficiente, iniettata dal pannello', () => {
+  // executeScript({ func }) serializza la funzione: niente import né costanti fuori dal suo corpo
+  const src = read('content/collector.js').replace(/^\s*\/\/.*$/gm, '').trim();
+  assert.ok(src.startsWith('export function collectPageSnapshot('), 'il file contiene solo la funzione');
+  assert.equal((src.match(/^(import|export|const|let|var|function)\b/gm) || []).length, 1, 'nessuna dichiarazione fuori dalla funzione');
+  assert.ok(src.endsWith('}'));
+  const reader = read('sidepanel/pageReader.js');
+  assert.match(reader, /import \{ collectPageSnapshot \} from '\.\.\/content\/collector\.js'/);
+  assert.match(reader, /func: collectPageSnapshot/);
 });
 
 test('il content script legge soltanto: nessuna modifica alla pagina, nessuna rete', () => {
@@ -90,13 +96,27 @@ test('il content script legge soltanto: nessuna modifica alla pagina, nessuna re
   for (const re of forbidden) assert.ok(!re.test(src), `collector.js contiene ${re}`);
 });
 
-test('nessuna chiamata di rete, codice dinamico o HTML costruito da stringhe', () => {
+test('rete solo in lib/fetchPage.js: GET, senza cookie né referrer; niente codice dinamico o HTML da stringhe', () => {
   for (const file of JS) {
     const src = read(file);
-    assert.ok(!/\b(fetch|XMLHttpRequest|WebSocket|sendBeacon|EventSource)\s*\(/.test(src), `${file}: chiamata di rete`);
+    if (file !== 'lib/fetchPage.js') {
+      assert.ok(!/\b(fetch|XMLHttpRequest|WebSocket|sendBeacon|EventSource)\s*\(/.test(src), `${file}: chiamata di rete`);
+    }
+    assert.ok(!/\bmethod\s*:\s*['"](POST|PUT|PATCH|DELETE)/i.test(src), `${file}: richiesta che modifica dati`);
     assert.ok(!/\beval\s*\(|new\s+Function\s*\(/.test(src), `${file}: codice dinamico`);
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src), `${file}: HTML da stringhe`);
   }
+  const fetcher = read('lib/fetchPage.js');
+  assert.match(fetcher, /method: 'GET'/);
+  assert.match(fetcher, /credentials: 'omit'/);
+  assert.match(fetcher, /referrerPolicy: 'no-referrer'/);
+  assert.ok(!/\bbody\s*:/.test(fetcher), 'nessun dato inviato');
+});
+
+test("l'HTML scaricato si legge solo con DOMParser (documento inerte, mai inserito nella pagina)", () => {
+  const reader = read('sidepanel/pageReader.js');
+  assert.match(reader, /new DOMParser\(\)\.parseFromString\(html, 'text\/html'\)/);
+  for (const file of JS) assert.ok(!/document\.(open|write)|srcdoc|createContextualFragment/.test(read(file)), file);
 });
 
 test('nessuna credenziale nel codice', () => {

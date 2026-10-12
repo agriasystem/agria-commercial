@@ -1,146 +1,204 @@
-// Pannello laterale di Agria Scout: analisi della pagina, correzione dei dati, verifica HubSpot.
-// Tutto il testo che arriva dalla pagina va a schermo con textContent / value, mai come HTML.
+// Pannello laterale di Agria Scout: scansione del sito del prospect, form Azienda e Contatto con
+// le proprietà HubSpot, persone e dati rilevati, verifica HubSpot (MOCK).
 
-import { analyzeSnapshot, COMPANY_FIELDS, CONTACT_FIELDS } from '../lib/parser.js';
-import { applyAnalysis, editField, emptyDraft, pickAlternative, restoreDraft, usePerson } from '../lib/draft.js';
+import { analyzeSnapshot } from '../lib/parser.js';
+import { pageTypeOf } from '../lib/discovery.js';
+import { fetchText } from '../lib/fetchPage.js';
+import { scanSite } from '../lib/scanner.js';
+import { summaryOf } from '../lib/siteData.js';
+import { COMPANY_PROPS, CONTACT_PROPS, LEAD_STATUS } from '../lib/crmModel.js';
+import {
+  applyFindings, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
+  restoreDraft, setLegalBasisConfirmed, usePerson,
+} from '../lib/draft.js';
 import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normalizeUrl } from '../lib/validation.js';
 import { loadConfig, MOCK_SCENARIOS, normalizeConfig, onConfigChange } from '../lib/config.js';
 import { createHubspotClient, HubspotError } from '../lib/hubspotClient.js';
 import { createMockHubspotClient } from '../lib/mockHubspotClient.js';
-import { PageReadError, readActivePage } from './pageReader.js';
+import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
+import {
+  allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
+} from './render.js';
 
-const SECTIONS = { company: COMPANY_FIELDS, contact: CONTACT_FIELDS };
-const LABELS = {
-  company: { name: 'Nome azienda', website: 'Sito web', domain: 'Dominio', email: 'Email', phone: 'Telefono', address: 'Indirizzo', city: 'Città', region: 'Regione' },
-  contact: { firstName: 'Nome', lastName: 'Cognome', role: 'Ruolo', email: 'Email', phone: 'Telefono', linkedin: 'LinkedIn' },
-};
-const HALF = new Set(['company.city', 'company.region', 'contact.firstName', 'contact.lastName']);
-const INPUT_MODE = { email: 'email', phone: 'tel', website: 'url', linkedin: 'url' };
+const PROPS = { company: COMPANY_PROPS, contact: CONTACT_PROPS };
 // controlli sulle correzioni a mano: avvisano, non bloccano
 const CHECKS = {
-  'company.website': [(v) => normalizeUrl(v) !== '', 'Indirizzo web non valido.'],
-  'company.domain': [(v) => normalizeDomain(v) !== '', 'Dominio non valido (es. agriturismo.it).'],
-  'company.email': [isValidEmail, 'Email non valida.'],
-  'company.phone': [isValidPhone, 'Numero non riconosciuto: controlla le cifre.'],
-  'contact.email': [isValidEmail, 'Email non valida.'],
-  'contact.phone': [isValidPhone, 'Numero non riconosciuto: controlla le cifre.'],
-  'contact.linkedin': [(v) => normalizeLinkedin(v)?.kind === 'profile', 'Serve il link a un profilo personale (linkedin.com/in/…).'],
+  url: [(v) => normalizeUrl(v) !== '', 'Indirizzo web non valido.'],
+  domain: [(v) => normalizeDomain(v) !== '', 'Dominio non valido (es. agriturismo.it).'],
+  email: [isValidEmail, 'Email non valida.'],
+  phone: [isValidPhone, 'Numero non riconosciuto: controlla le cifre.'],
+  linkedinProfile: [(v) => normalizeLinkedin(v)?.kind === 'profile', 'Serve un profilo personale (linkedin.com/in/…).'],
+  linkedinCompany: [(v) => normalizeLinkedin(v)?.kind === 'company', 'Serve una pagina aziendale (linkedin.com/company/…).'],
 };
-const IDLE_TEXT = 'Apri il sito di un prospect e premi «Analizza pagina».';
+const INPUT_MODE = { email: 'email', phone: 'tel', url: 'url', domain: 'url', linkedinProfile: 'url', linkedinCompany: 'url' };
+const IDLE_TEXT = 'Apri il sito di un prospect e premi «Scansione approfondita».';
 const STALE = { kind: 'warn', title: 'Verifica da ripetere', text: 'Dati o impostazioni sono cambiati durante la verifica.' };
+const SCAN_TIMEOUT_MS = 10000;
 
 const $ = (selector) => document.querySelector(selector);
 let draft = emptyDraft();
 let config = normalizeConfig(null);
-let analyzing = false;
+let busy = ''; // '' | 'scan' | 'analyze'
+let scanController = null;
 let verifying = false;
 let dataVersion = 0; // cresce a ogni cambio di dati: una verifica partita prima non vale più
 let saveTimer = null;
 let clearTimer = null;
 
-function el(tag, attrs = {}, text) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-  if (text != null) node.textContent = text;
-  return node;
-}
-
 // ---------------------------------------------------------------------------------------------
-// campi
+// form Azienda e Contatto
 
-function buildForm() {
-  for (const [section, keys] of Object.entries(SECTIONS)) {
+function buildForms() {
+  for (const [section, props] of Object.entries(PROPS)) {
     const box = $(`#${section}-fields`);
-    for (const key of keys) {
-      const id = `${section}-${key}`;
-      const wrap = el('div', { id: `${id}-field`, class: HALF.has(`${section}.${key}`) ? 'field half' : 'field' });
-      const input = el('input', { id, type: 'text', autocomplete: 'off', spellcheck: 'false', inputmode: INPUT_MODE[key] || 'text', 'aria-describedby': `${id}-meta` });
-      input.addEventListener('input', () => onFieldInput(section, key, input.value));
-      input.addEventListener('blur', () => renderMeta(section, key));
-      wrap.append(el('label', { for: id }, LABELS[section][key]), input, el('div', { id: `${id}-meta`, class: 'meta' }), el('div', { class: 'alts', hidden: '' }));
+    for (const prop of props) {
+      const id = `${section}-${prop.name}`;
+      const wrap = el('div', { id: `${id}-field`, class: prop.half ? 'field half' : 'field' },
+        el('label', { for: id }, prop.label, ' ', el('code', {}, prop.name)));
+      let control;
+      if (prop.input === 'select') {
+        control = el('select', { id }, el('option', { value: '' }, '—'), ...prop.options.map((o) => el('option', { value: o }, o)));
+        control.addEventListener('change', () => onEdit(section, prop.name, control.value));
+      } else if (prop.input === 'textarea') {
+        control = el('textarea', { id, rows: '10', spellcheck: 'false' });
+        control.addEventListener('input', () => onEdit(section, prop.name, control.value));
+      } else if (prop.input === 'owner' || prop.input === 'fixed') {
+        control = el('div', { id, class: 'readonly', role: 'textbox', 'aria-readonly': 'true' });
+      } else if (prop.input === 'legalBasis') {
+        control = el('input', { id, type: 'text', readonly: true });
+      } else {
+        control = el('input', { id, type: 'text', autocomplete: 'off', spellcheck: 'false', inputmode: INPUT_MODE[prop.check] || 'text' });
+        control.addEventListener('input', () => onEdit(section, prop.name, control.value));
+        control.addEventListener('blur', () => renderMeta(section, prop));
+      }
+      control.setAttribute('aria-describedby', `${id}-meta`);
+      wrap.append(control);
+      if (prop.input === 'legalBasis') {
+        const box2 = el('input', { id: 'legal-basis-confirm', type: 'checkbox' });
+        box2.addEventListener('change', () => {
+          draft = setLegalBasisConfirmed(draft, box2.checked);
+          renderMeta('contact', prop);
+          scheduleSave();
+        });
+        wrap.append(el('label', { class: 'confirm' }, box2, ' Confermo la base giuridica per questo contatto'));
+      }
+      if (prop.input === 'textarea') {
+        wrap.append(el('button', { type: 'button', class: 'btn small', id: 'quick-context-reset', onclick: () => {
+          draft = resetQuickContext(draft);
+          renderField('company', prop);
+          scheduleSave();
+        } }, 'Rigenera dai dati rilevati'));
+      }
+      wrap.append(el('div', { id: `${id}-meta`, class: 'meta' }), el('div', { class: 'alts', hidden: true }));
       box.append(wrap);
     }
   }
 }
 
-function renderMeta(section, key, { typing = false } = {}) {
-  const f = draft[section][key];
-  const check = CHECKS[`${section}.${key}`];
-  const invalid = !typing && Boolean(f.value.trim()) && Boolean(check) && !check[0](f.value);
-  const parts = [];
-  if (invalid) parts.push(['bad', check[1]]);
-  if (f.edited) parts.push(['edit', 'Modificato a mano']);
-  else if (f.value) {
-    parts.push(['', `Fonte: ${f.source}`]);
-    if (f.uncertain) parts.push(['unc', 'da verificare']);
-  } else if (draft.page) parts.push(['', 'Non trovato nella pagina']);
-  $(`#${section}-${key}-meta`).replaceChildren(...parts.flatMap(([cls, text], i) => [
-    ...(i ? [document.createTextNode(' · ')] : []),
-    el('span', cls ? { class: cls } : {}, text),
-  ]));
-  $(`#${section}-${key}-field`).classList.toggle('warn', invalid);
+function invalidMessage(prop, field) {
+  const check = CHECKS[prop.check];
+  return check && field.value.trim() && !check[0](field.value) ? check[1] : '';
 }
 
-function renderAlternatives(section, key) {
-  const box = $(`#${section}-${key}-field .alts`);
-  const alternatives = draft[section][key].alternatives.slice(0, 4);
-  const buttons = alternatives.map((value) => {
-    const button = el('button', { type: 'button', class: 'alt', title: `Usa questo valore: ${value}` }, value);
-    button.addEventListener('click', () => {
-      draft = pickAlternative(draft, section, key, value);
-      dataChanged(section, key);
-      renderField(section, key);
-    });
-    return button;
+function renderMeta(section, prop, { typing = false } = {}) {
+  const field = draft[section][prop.name];
+  const meta = $(`#${section}-${prop.name}-meta`);
+  if (prop.input === 'owner') {
+    meta.replaceChildren(field.value ? 'Dalle Impostazioni.' : el('span', { class: 'bad' }, 'Non impostato: indica il tuo ID owner nelle Impostazioni.'));
+    return;
+  }
+  if (prop.input === 'fixed') {
+    meta.replaceChildren('Valore per un nuovo prospect.');
+    return;
+  }
+  if (prop.input === 'legalBasis') {
+    meta.replaceChildren(draft.legalBasisConfirmed
+      ? el('span', { class: 'chip high' }, 'Confermata')
+      : el('span', { class: 'chip check' }, 'Valore suggerito: da confermare'));
+    return;
+  }
+  const invalid = typing ? '' : invalidMessage(prop, field);
+  meta.replaceChildren(...fieldMeta(field, { invalid, analyzed: draft.site.pages.length > 0, showEvidence: prop.input === 'select' }));
+  $(`#${section}-${prop.name}-field`).classList.toggle('warn', Boolean(invalid));
+}
+
+function renderField(section, prop) {
+  const field = draft[section][prop.name];
+  const control = $(`#${section}-${prop.name}`);
+  if (prop.input === 'owner') {
+    control.textContent = field.value ? `${config.hubspot.ownerName || 'Commerciale'} · ID ${field.value}` : '—';
+  } else if (prop.input === 'fixed') {
+    control.textContent = `${LEAD_STATUS.label} (${field.value || LEAD_STATUS.value})`;
+  } else if (control.value !== field.value) {
+    control.value = prop.input === 'select' && !prop.options.includes(field.value) ? '' : field.value;
+  }
+  if (prop.input === 'legalBasis') $('#legal-basis-confirm').checked = draft.legalBasisConfirmed;
+  if (prop.name === 'tipo_struttura_hospitality') control.disabled = draft.company.settore_agria.value !== 'Hospitality';
+  renderMeta(section, prop);
+  const alts = $(`#${section}-${prop.name}-field .alts`);
+  const chips = ['owner', 'fixed', 'legalBasis', 'textarea', 'select'].includes(prop.input) ? [] : alternatives(field.alternatives, (value) => {
+    draft = pickAlternative(draft, section, prop.name, value);
+    afterEdit(section, prop.name);
   });
-  box.replaceChildren(...(buttons.length ? [el('span', { class: 'lbl' }, 'Altri trovati:'), ...buttons] : []));
-  box.hidden = !buttons.length;
+  alts.replaceChildren(...chips);
+  alts.hidden = !chips.length;
 }
 
-function renderField(section, key) {
-  const input = $(`#${section}-${key}`);
-  if (input.value !== draft[section][key].value) input.value = draft[section][key].value;
-  renderMeta(section, key);
-  renderAlternatives(section, key);
+function renderReadiness() {
+  const { ready, text } = contactReadiness(draft.contact);
+  const box = $('#contact-ready');
+  box.textContent = text;
+  box.dataset.ready = ready ? 'yes' : 'no';
 }
 
-function renderSection(section) {
-  for (const key of SECTIONS[section]) renderField(section, key);
+function renderForms() {
+  for (const [section, props] of Object.entries(PROPS)) for (const prop of props) renderField(section, prop);
+  renderReadiness();
 }
 
 function renderPeople() {
-  const buttons = draft.people.map((p, index) => {
-    const button = el('button', { type: 'button', class: 'person', title: 'Usa come contatto' });
-    button.append(
-      el('span', { class: 'n' }, `${p.firstName} ${p.lastName}`.trim()),
-      el('span', { class: 'r' }, [p.role, p.email].filter(Boolean).join(' · ') || `Fonte: ${p.source}`),
-    );
-    button.addEventListener('click', () => {
-      draft = usePerson(draft, index);
-      renderSection('contact');
-      renderPeople();
-      scheduleSave();
-    });
-    return button;
+  const cards = peopleCards(draft.site, draft.mainPerson, (key) => {
+    draft = usePerson(draft, key, config);
+    renderForms();
+    renderPeople();
+    scheduleSave();
   });
-  $('#people-list').replaceChildren(...buttons);
-  $('#people').hidden = !buttons.length;
+  $('#people-list').replaceChildren(...(cards.length ? cards : [el('p', { class: 'hint' }, 'Nessuna persona individuata finora.')]));
+  $('#people-count').textContent = cards.length ? String(cards.length) : '';
+}
+
+function renderSiteData() {
+  $('#all-data').replaceChildren(...allDataGroups(draft.site));
+  const { pages, failures } = draft.site;
+  const details = $('#pages');
+  details.hidden = !pages.length && !failures.length;
+  $('#pages-title').textContent = `${pages.length} ${pages.length === 1 ? 'pagina analizzata' : 'pagine analizzate'}${failures.length ? ` · ${failures.length} non raggiungibili` : ''}`;
+  $('#pages-list').replaceChildren(...pagesList(draft.site));
+  const summary = $('#summary');
+  summary.hidden = !pages.length;
+  summary.textContent = pages.length ? summaryOf(draft.site) : '';
 }
 
 function renderAll() {
-  renderSection('company');
-  renderSection('contact');
+  renderForms();
   renderPeople();
+  renderSiteData();
 }
 
-function onFieldInput(section, key, value) {
-  draft = editField(draft, section, key, value);
-  renderMeta(section, key, { typing: true });
-  dataChanged(section, key);
+function onEdit(section, name, value) {
+  draft = editField(draft, section, name, value);
+  const prop = PROPS[section].find((p) => p.name === name);
+  renderMeta(section, prop, { typing: true });
+  afterEdit(section, name, { rerender: false });
 }
 
-function dataChanged(section, key) {
-  if (section === 'company' && (key === 'domain' || key === 'name')) invalidateVerify();
+function afterEdit(section, name, { rerender = true } = {}) {
+  const prop = PROPS[section].find((p) => p.name === name);
+  if (rerender) renderField(section, prop);
+  if (name === 'settore_agria') renderField('company', PROPS.company.find((p) => p.name === 'tipo_struttura_hospitality'));
+  renderField('company', PROPS.company.find((p) => p.name === 'hs_quick_context'));
+  if (section === 'contact') renderReadiness();
+  if (section === 'company' && (name === 'domain' || name === 'name')) invalidateVerify();
   scheduleSave();
 }
 
@@ -149,42 +207,109 @@ function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     chrome.storage.session.set({ draft }).catch((err) => console.warn('[Agria Scout] bozza non salvata:', err));
-  }, 250);
+  }, 300);
 }
 
 // ---------------------------------------------------------------------------------------------
-// stato e analisi
+// stato, scansione, analisi della singola pagina
 
-function setStatus(state, text, { page = '', notes = [] } = {}) {
+function setStatus(state, text, notes = []) {
   $('#status').dataset.state = state;
   $('#status-text').textContent = text;
-  const pageLine = $('#status-page');
-  pageLine.textContent = page ? `Pagina: ${page}` : '';
-  pageLine.hidden = !page;
   const list = $('#status-notes');
   list.replaceChildren(...notes.map((n) => el('li', {}, n)));
   list.hidden = !notes.length;
 }
 
+function setProgress(progress) {
+  const box = $('#progress');
+  box.hidden = !progress;
+  if (!progress) return;
+  const { index, total, url, phase } = progress;
+  const pct = phase === 'sitemap' ? 5 : Math.round((index / Math.max(total, 1)) * 100);
+  $('#progress-bar').style.width = `${pct}%`;
+  box.querySelector('[role="progressbar"]').setAttribute('aria-valuenow', String(pct));
+  $('#progress-url').textContent = url || '';
+  setStatus('busy', phase === 'sitemap' ? 'Lettura della sitemap…' : `Analisi pagina ${index} di ${total}…`);
+}
+
+function setBusy(mode) {
+  busy = mode;
+  const scan = $('#deep-scan');
+  scan.textContent = mode === 'scan' ? 'Annulla scansione' : 'Scansione approfondita';
+  scan.classList.toggle('danger', mode === 'scan');
+  scan.classList.toggle('primary', mode !== 'scan');
+  scan.disabled = mode === 'analyze';
+  $('#analyze').disabled = Boolean(mode);
+  $('#clear').disabled = Boolean(mode);
+}
+
+function addPage(findings) {
+  const { draft: next, mode } = applyFindings(draft, findings, config);
+  draft = next;
+  invalidateVerify();
+  renderAll();
+  scheduleSave();
+  return mode;
+}
+
+async function onDeepScan() {
+  if (busy === 'scan') {
+    scanController?.abort();
+    return;
+  }
+  if (busy) return;
+  setBusy('scan');
+  scanController = new AbortController();
+  setStatus('busy', 'Lettura della pagina aperta…');
+  let firstMode = '';
+  try {
+    const { snapshot } = await readActivePage();
+    const result = await scanSite({
+      startUrl: snapshot.url,
+      startSnapshot: snapshot,
+      maxPages: config.scan.maxPages,
+      signal: scanController.signal,
+      fetchText: (url, options) => fetchText(url, { ...options, timeoutMs: SCAN_TIMEOUT_MS }),
+      toSnapshot: readDownloadedPage,
+      onPage: (findings) => {
+        const mode = addPage(findings);
+        firstMode ||= mode;
+      },
+      onFailure: (failure) => {
+        draft = recordFailure(draft, failure);
+        renderSiteData();
+        scheduleSave();
+      },
+      onProgress: setProgress,
+    });
+    const failed = result.failed ? ` ${result.failed} ${result.failed === 1 ? 'pagina non raggiungibile' : 'pagine non raggiungibili'}: vedi l'elenco.` : '';
+    const text = result.cancelled
+      ? `Scansione annullata: conservati i dati delle ${result.analyzed} pagine già analizzate.`
+      : `Scansione completata${firstMode === 'merged' ? ' (dati aggiunti a quelli già raccolti)' : ''}.${failed}`;
+    setStatus(result.cancelled ? 'idle' : 'ok', text, draft.site.notes);
+  } catch (err) {
+    if (err instanceof PageReadError) setStatus('error', err.message);
+    else {
+      console.error('[Agria Scout] scansione non riuscita:', err);
+      setStatus('error', `Scansione non riuscita: ${err?.message || err}`);
+    }
+  } finally {
+    scanController = null;
+    setProgress(null);
+    setBusy('');
+  }
+}
+
 async function onAnalyze() {
-  if (analyzing) return;
-  analyzing = true;
-  const button = $('#analyze');
-  button.disabled = true;
-  button.textContent = 'Analisi in corso…';
+  if (busy) return;
+  setBusy('analyze');
   setStatus('busy', 'Lettura della pagina in corso…');
   try {
     const { snapshot, stillLoading } = await readActivePage();
-    const result = analyzeSnapshot(snapshot);
-    const { draft: next, mode, added } = applyAnalysis(draft, result);
-    draft = next;
-    invalidateVerify();
-    renderAll();
-    scheduleSave();
-    const notes = stillLoading ? ["La pagina stava ancora caricando: se manca qualcosa, ripeti l'analisi.", ...result.notes] : result.notes;
-    let text = `Analisi completata: ${result.found} dati trovati.`;
-    if (mode === 'merged') text = added ? `Pagina aggiunta: ${added} nuovi dati. Le tue correzioni restano.` : 'Pagina aggiunta: nessun dato nuovo. Le tue correzioni restano.';
-    setStatus('ok', text, { page: result.page.url, notes });
+    const mode = addPage(analyzeSnapshot(snapshot, { pageType: pageTypeOf(snapshot.url, snapshot.title) }));
+    const notes = stillLoading ? ["La pagina stava ancora caricando: se manca qualcosa, ripeti l'analisi.", ...draft.site.notes] : draft.site.notes;
+    setStatus('ok', mode === 'merged' ? 'Pagina aggiunta ai dati già raccolti. Le tue correzioni restano.' : 'Analisi della pagina completata.', notes);
   } catch (err) {
     if (err instanceof PageReadError) setStatus('error', err.message);
     else {
@@ -192,9 +317,7 @@ async function onAnalyze() {
       setStatus('error', `Analisi non riuscita: ${err?.message || err}`);
     }
   } finally {
-    analyzing = false;
-    button.disabled = false;
-    button.textContent = 'Analizza pagina';
+    setBusy('');
   }
 }
 
@@ -208,6 +331,7 @@ function disarmClear() {
 
 // due clic: il primo chiede conferma, il secondo svuota
 function onClear() {
+  if (busy) return;
   if (!clearTimer) {
     const button = $('#clear');
     button.textContent = 'Conferma svuota';
@@ -216,7 +340,7 @@ function onClear() {
     return;
   }
   disarmClear();
-  draft = emptyDraft();
+  draft = refreshForms(emptyDraft(), config);
   invalidateVerify();
   renderAll();
   scheduleSave();
@@ -224,7 +348,7 @@ function onClear() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// HubSpot
+// HubSpot (MOCK)
 
 function hubspotClient() {
   return config.hubspot.mode === 'mock' ? createMockHubspotClient(config.hubspot) : createHubspotClient(config);
@@ -286,7 +410,8 @@ function renderConfig() {
 // ---------------------------------------------------------------------------------------------
 
 async function init() {
-  buildForm();
+  buildForms();
+  $('#deep-scan').addEventListener('click', onDeepScan);
   $('#analyze').addEventListener('click', onAnalyze);
   $('#clear').addEventListener('click', onClear);
   $('#verify').addEventListener('click', onVerify);
@@ -295,8 +420,11 @@ async function init() {
 
   onConfigChange((next) => {
     config = next;
+    draft = refreshForms(draft, config);
     renderConfig();
+    renderForms();
     invalidateVerify();
+    scheduleSave();
   });
   try {
     config = await loadConfig();
@@ -306,9 +434,9 @@ async function init() {
   renderConfig();
 
   const saved = await chrome.storage.session.get('draft').catch(() => ({}));
-  draft = restoreDraft(saved.draft);
+  draft = refreshForms(restoreDraft(saved.draft), config);
   renderAll();
-  if (draft.page) setStatus('ok', "Dati ripresi dall'ultima analisi.", { page: draft.page.url, notes: draft.notes });
+  if (draft.site.pages.length) setStatus('ok', "Dati ripresi dall'ultima analisi.", draft.site.notes);
   else setStatus('idle', IDLE_TEXT);
 }
 

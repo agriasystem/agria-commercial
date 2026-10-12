@@ -1,7 +1,9 @@
-// Lettura della pagina attiva nella finestra del pannello: inietta il content script e ne
-// riceve la fotografia. Nessun dato esce dal browser.
+// Lettura delle pagine per il pannello.
+//   readActivePage: la scheda attiva, con il content script iniettato (contenuto reso dal browser);
+//   readDownloadedPage: una pagina scaricata dalla scansione, letta con DOMParser (inerte).
+// Nessun dato esce dal browser.
 
-const COLLECTOR = 'content/collector.js';
+import { collectPageSnapshot } from '../content/collector.js';
 
 export class PageReadError extends Error {
   constructor(message) {
@@ -26,7 +28,11 @@ export async function readActivePage() {
   }
   let results;
   try {
-    results = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [COLLECTOR] });
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: collectPageSnapshot,
+      args: [null, null, 'rendered'],
+    });
   } catch (err) {
     throw new PageReadError(`Chrome non consente di leggere questa pagina (${err?.message || err}).`);
   }
@@ -35,4 +41,10 @@ export async function readActivePage() {
     throw new PageReadError('La pagina non ha restituito dati: attendi che finisca di caricare e riprova.');
   }
   return { snapshot, stillLoading: tab.status === 'loading' };
+}
+
+/** HTML scaricato → fotografia, senza eseguire nulla della pagina. */
+export function readDownloadedPage(html, url) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return collectPageSnapshot(doc, url, 'parsed');
 }

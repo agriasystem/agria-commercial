@@ -20,27 +20,46 @@
     <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
     <div aria-live="polite">
       <p id="status-text" class="status-text">Caricamento…</p>
-      <p id="status-page" class="status-page" hidden></p>
+      <div id="progress" class="progress" hidden>
+        <div class="bar" role="progressbar" aria-label="Avanzamento della scansione" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="progress-bar"></span></div>
+        <p id="progress-url" class="status-page"></p>
+      </div>
+      <p id="summary" class="summary" hidden></p>
       <ul id="status-notes" class="notes" hidden></ul>
     </div>
+    <details id="pages" class="pages" hidden>
+      <summary id="pages-title"></summary>
+      <ul id="pages-list" class="pages-list"></ul>
+    </details>
     <div class="actions">
-      <button id="analyze" class="btn primary" type="button">Analizza pagina</button>
+      <button id="deep-scan" class="btn primary wide" type="button">Scansione approfondita</button>
+    </div>
+    <div class="actions">
+      <button id="analyze" class="btn grow" type="button">Analizza solo questa pagina</button>
       <button id="clear" class="btn ghost" type="button">Svuota</button>
     </div>
   </section>
 
   <section class="card" aria-labelledby="company-title">
-    <h2 id="company-title" class="eyebrow">Azienda</h2>
+    <h2 id="company-title" class="eyebrow">Azienda <span class="tag">HubSpot</span></h2>
     <div id="company-fields" class="fields"></div>
   </section>
 
   <section class="card" aria-labelledby="contact-title">
-    <h2 id="contact-title" class="eyebrow">Contatto</h2>
+    <h2 id="contact-title" class="eyebrow">Contatto <span class="tag">HubSpot</span></h2>
+    <p id="contact-ready" class="ready" data-ready="no"></p>
     <div id="contact-fields" class="fields"></div>
-    <div id="people" class="people" hidden>
-      <h3 class="label">Altre persone trovate</h3>
-      <div id="people-list" class="people-list"></div>
-    </div>
+  </section>
+
+  <section class="card" aria-labelledby="people-title">
+    <h2 id="people-title" class="eyebrow">Persone rilevate <span id="people-count" class="count"></span></h2>
+    <p class="hint">Diventa Contatto HubSpot solo chi ha nome, cognome e almeno un recapito tra email, telefono e LinkedIn.</p>
+    <div id="people-list" class="people-list"></div>
+  </section>
+
+  <section class="card" aria-labelledby="data-title">
+    <h2 id="data-title" class="eyebrow">Tutti i dati rilevati</h2>
+    <div id="all-data" class="all-data"></div>
   </section>
 
   <section class="card" aria-labelledby="hubspot-title">

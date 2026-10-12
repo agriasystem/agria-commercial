@@ -1,169 +1,149 @@
-// Bozza del prospect mostrata nel pannello: i valori trovati dal parser più le correzioni a mano.
+// Bozza del prospect mostrata nel pannello: i dati del sito accumulati, i form Azienda e
+// Contatto con le proprietà HubSpot e le correzioni del commerciale.
 // Funzioni pure che restituiscono sempre una bozza nuova: il pannello le usa, i test le provano.
 //
-// Regola di unione: una seconda pagina dello STESSO sito (es. «Contatti» dopo la home) riempie
-// solo i campi vuoti e non tocca mai quelli corretti a mano. Un sito diverso è un nuovo prospect
-// e sostituisce tutto.
+// Regole: un campo corretto a mano non viene mai sovrascritto; i campi non toccati si
+// ricalcolano dai dati di TUTTE le pagine analizzate; un sito diverso è un nuovo prospect.
 
-import { COMPANY_FIELDS, CONTACT_FIELDS, emptyField } from './parser.js';
-import { normKey } from './validation.js';
+import { buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, proposeCompany, proposeContact } from './crmModel.js';
+import { addFailure, addPageFindings, emptySite } from './siteData.js';
 
-const SECTIONS = { company: COMPANY_FIELDS, contact: CONTACT_FIELDS };
-const MAX_ALTERNATIVES = 8;
-const MAX_PEOPLE = 8;
-const PERSON_FIELDS = ['firstName', 'lastName', 'role', 'email', 'phone', 'linkedin'];
+export const DRAFT_VERSION = 2;
+const MAX_ALTERNATIVES = 12;
+const EMAIL_PROPS = ['email_aziendale_principale', 'email_aziendale_secondaria'];
 
 const unique = (list) => [...new Set(list.filter(Boolean))];
 const str = (x) => (typeof x === 'string' ? x : '');
-const blankField = () => ({ ...emptyField(), edited: false });
-const copyField = (f) => ({ value: f.value, source: f.source, uncertain: f.uncertain, alternatives: [...f.alternatives], edited: false });
+const blankField = () => ({ value: '', reliability: '', method: '', url: '', evidence: '', alternatives: [], edited: false });
+const blankFields = (props) => Object.fromEntries(props.map((p) => [p.name, blankField()]));
+const valuesOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
 
 export function emptyDraft() {
-  const section = (keys) => Object.fromEntries(keys.map((k) => [k, blankField()]));
-  return { page: null, company: section(COMPANY_FIELDS), contact: section(CONTACT_FIELDS), people: [], notes: [] };
+  return {
+    version: DRAFT_VERSION,
+    site: emptySite(),
+    company: blankFields(COMPANY_PROPS),
+    contact: blankFields(CONTACT_PROPS),
+    mainPerson: null,
+    mainPersonChosen: false,
+    legalBasisConfirmed: false,
+  };
 }
 
-const personKey = (p) => normKey(`${p.firstName}${p.lastName}`);
-const contactKey = (contact) => normKey(`${contact.firstName.value}${contact.lastName.value}`);
-
-function personFromContact(contact) {
-  const p = { source: contact.firstName.edited ? 'inserito a mano' : contact.firstName.source, uncertain: contact.firstName.uncertain, sources: {} };
-  for (const f of PERSON_FIELDS) p[f] = contact[f].value;
-  for (const f of ['email', 'phone', 'linkedin']) if (contact[f].value) p.sources[f] = contact[f].edited ? 'inserito a mano' : contact[f].source;
-  return p;
-}
-
-function samePeopleList(people, contact) {
-  const current = contactKey(contact);
-  const seen = new Set();
-  return people.filter((p) => {
-    const key = personKey(p);
-    if (!key || key === current || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, MAX_PEOPLE);
-}
-
-// riempie il campo solo se è vuoto e non è stato toccato a mano; le alternative si sommano
-function mergeField(current, incoming) {
-  let added = 0;
-  if (!current.value && !current.edited && incoming.value) {
-    Object.assign(current, { value: incoming.value, source: incoming.source, uncertain: incoming.uncertain });
-    added = 1;
+// campo non toccato: prende la proposta; campo corretto a mano: resta, e la proposta diventa un'alternativa
+function mergeField(field, proposal) {
+  if (!field.edited) {
+    Object.assign(field, { ...proposal, alternatives: [...proposal.alternatives].slice(0, MAX_ALTERNATIVES) });
+    return;
   }
-  current.alternatives = unique([...current.alternatives, incoming.value, ...incoming.alternatives])
-    .filter((a) => a !== current.value)
+  field.alternatives = unique([...field.alternatives, proposal.value, ...proposal.alternatives])
+    .filter((a) => a !== field.value)
     .slice(0, MAX_ALTERNATIVES);
-  return added;
 }
 
-/** Applica il risultato di un'analisi. → { draft, mode: 'new' | 'merged', added } */
-export function applyAnalysis(draft, result) {
-  if (draft.page && draft.page.domain !== result.page.domain) {
-    const next = {
-      page: { ...result.page },
-      company: Object.fromEntries(COMPANY_FIELDS.map((k) => [k, copyField(result.company[k])])),
-      contact: Object.fromEntries(CONTACT_FIELDS.map((k) => [k, copyField(result.contact[k])])),
-      people: result.people.map((p) => ({ ...p, sources: { ...p.sources } })),
-      notes: [...result.notes],
-    };
-    return { draft: next, mode: 'new', added: result.found };
-  }
+function updateQuickContext(draft) {
+  const field = draft.company.hs_quick_context;
+  if (field.edited) return;
+  const value = buildQuickContext(draft.site, valuesOf(draft.company), valuesOf(draft.contact));
+  Object.assign(field, { value, reliability: '', method: value ? 'generato dai dati rilevati' : '', url: '', evidence: '', alternatives: [] });
+}
 
-  // stesso sito, oppure prima analisi (si conservano eventuali campi già scritti a mano)
+/** Ricalcola le proposte dai dati del sito (e dalle Impostazioni per il proprietario). */
+export function refreshForms(draft, config) {
   const next = structuredClone(draft);
-  const firstAnalysis = !draft.page;
-  next.page = { ...result.page };
-  next.notes = [...result.notes];
-  let added = 0;
-  for (const k of COMPANY_FIELDS) added += mergeField(next.company[k], result.company[k]);
+  const fixed = {};
+  for (const prop of EMAIL_PROPS) if (next.company[prop].edited && next.company[prop].value) fixed[prop] = next.company[prop].value;
+  const company = proposeCompany(next.site, config, { fixed });
+  for (const { name } of COMPANY_PROPS) if (name !== 'hs_quick_context') mergeField(next.company[name], company[name]);
+  const { fields, mainKey } = proposeContact(next.site, config, next.mainPersonChosen ? next.mainPerson : null);
+  next.mainPerson = mainKey;
+  for (const { name } of CONTACT_PROPS) mergeField(next.contact[name], fields[name]);
+  updateQuickContext(next);
+  return next;
+}
 
-  const current = contactKey(next.contact);
-  const incoming = contactKey(result.contact);
-  if (!current || !incoming || current === incoming) {
-    for (const k of CONTACT_FIELDS) added += mergeField(next.contact[k], result.contact[k]);
-  } else {
-    // un'altra persona: non si mescolano i dati, la si propone nell'elenco
-    next.people.unshift(personFromContact(result.contact));
-  }
-  next.people = samePeopleList([...next.people, ...result.people], next.contact);
-  return { draft: next, mode: firstAnalysis ? 'new' : 'merged', added };
+/** Risultati di una pagina → { draft, mode: 'new' | 'merged' }. Un altro dominio azzera tutto. */
+export function applyFindings(draft, findings, config) {
+  const otherSite = Boolean(draft.site.domain) && draft.site.domain !== findings.page.domain;
+  const base = otherSite ? emptyDraft() : structuredClone(draft);
+  base.site = addPageFindings(base.site, findings);
+  return { draft: refreshForms(base, config), mode: draft.site.domain && !otherSite ? 'merged' : 'new' };
+}
+
+/** Pagina non raggiungibile durante la scansione: resta nell'elenco, la scansione continua. */
+export function recordFailure(draft, failure) {
+  return { ...structuredClone(draft), site: addFailure(draft.site, failure) };
 }
 
 /** Correzione a mano di un campo. */
-export function editField(draft, section, key, value) {
+export function editField(draft, section, name, value) {
   const next = structuredClone(draft);
-  const f = next[section][key];
-  f.value = typeof value === 'string' ? value : '';
-  f.edited = true;
+  Object.assign(next[section][name], { value: typeof value === 'string' ? value : '', edited: true });
+  if (!(section === 'company' && name === 'hs_quick_context')) updateQuickContext(next);
   return next;
 }
 
-/** Sceglie uno degli altri valori trovati per il campo; quello di prima diventa un'alternativa. */
-export function pickAlternative(draft, section, key, value) {
+/** Sceglie uno degli altri valori trovati; quello di prima diventa un'alternativa. */
+export function pickAlternative(draft, section, name, value) {
   const next = structuredClone(draft);
-  const f = next[section][key];
-  if (!f.alternatives.includes(value)) return next;
-  f.alternatives = unique([f.value, ...f.alternatives.filter((a) => a !== value)]).slice(0, MAX_ALTERNATIVES);
-  f.value = value;
-  f.edited = true;
+  const field = next[section][name];
+  if (!field.alternatives.includes(value)) return next;
+  field.alternatives = unique([field.value, ...field.alternatives.filter((a) => a !== value)]).slice(0, MAX_ALTERNATIVES);
+  Object.assign(field, { value, edited: true });
+  updateQuickContext(next);
   return next;
 }
 
-/** Usa come Contatto una delle altre persone trovate; il contatto di prima torna nell'elenco. */
-export function usePerson(draft, index) {
+/** Usa una delle persone rilevate come Contatto principale (anche parziale: lo decide il commerciale). */
+export function usePerson(draft, key, config) {
+  if (!draft.site.people[key]) return draft;
   const next = structuredClone(draft);
-  const chosen = next.people[index];
-  if (!chosen) return next;
-  const previous = contactKey(next.contact) ? personFromContact(next.contact) : null;
-  for (const k of CONTACT_FIELDS) {
-    const value = str(chosen[k]);
-    const source = (chosen.sources && chosen.sources[k]) || chosen.source;
-    next.contact[k] = {
-      value,
-      source: value ? source : '',
-      uncertain: value ? Boolean(chosen.uncertain) : false,
-      alternatives: next.contact[k].alternatives.filter((a) => a !== value),
-      edited: false,
-    };
-  }
-  next.people.splice(index, 1);
-  if (previous) next.people.unshift(previous);
-  next.people = samePeopleList(next.people, next.contact);
+  next.mainPerson = key;
+  next.mainPersonChosen = true;
+  for (const field of Object.values(next.contact)) field.edited = false;
+  return refreshForms(next, config);
+}
+
+export function setLegalBasisConfirmed(draft, confirmed) {
+  return { ...structuredClone(draft), legalBasisConfirmed: confirmed === true };
+}
+
+/** Rigenera il contesto rapido, scartando le modifiche a mano. */
+export function resetQuickContext(draft) {
+  const next = structuredClone(draft);
+  next.company.hs_quick_context.edited = false;
+  updateQuickContext(next);
   return next;
 }
 
-/** Bozza salvata in chrome.storage.session → bozza valida (i dati malformati si scartano). */
+/** Bozza salvata in chrome.storage.session → bozza valida (dati malformati o di versioni vecchie si scartano). */
 export function restoreDraft(raw) {
   const draft = emptyDraft();
-  if (!raw || typeof raw !== 'object') return draft;
-  for (const [section, keys] of Object.entries(SECTIONS)) {
-    for (const k of keys) {
-      const f = raw[section]?.[k];
-      if (!f || typeof f.value !== 'string') continue;
-      draft[section][k] = {
-        value: f.value,
-        source: str(f.source),
-        uncertain: f.uncertain === true,
-        alternatives: Array.isArray(f.alternatives) ? f.alternatives.filter((a) => typeof a === 'string').slice(0, MAX_ALTERNATIVES) : [],
-        edited: f.edited === true,
-      };
+  if (!raw || typeof raw !== 'object' || raw.version !== DRAFT_VERSION) return draft;
+  try {
+    const site = raw.site;
+    if (!site || typeof site.domain !== 'string' || typeof site.facts !== 'object' || typeof site.people !== 'object' || !Array.isArray(site.pages)) return draft;
+    draft.site = { ...emptySite(), ...structuredClone(site) };
+    for (const [section, props] of [['company', COMPANY_PROPS], ['contact', CONTACT_PROPS]]) {
+      for (const { name } of props) {
+        const f = raw[section]?.[name];
+        if (!f || typeof f.value !== 'string') continue;
+        draft[section][name] = {
+          value: f.value,
+          reliability: f.reliability === 'high' || f.reliability === 'check' ? f.reliability : '',
+          method: str(f.method),
+          url: str(f.url),
+          evidence: str(f.evidence),
+          alternatives: Array.isArray(f.alternatives) ? f.alternatives.filter((a) => typeof a === 'string').slice(0, MAX_ALTERNATIVES) : [],
+          edited: f.edited === true,
+        };
+      }
     }
+    draft.mainPerson = typeof raw.mainPerson === 'string' && draft.site.people[raw.mainPerson] ? raw.mainPerson : null;
+    draft.mainPersonChosen = raw.mainPersonChosen === true && Boolean(draft.mainPerson);
+    draft.legalBasisConfirmed = raw.legalBasisConfirmed === true;
+    return draft;
+  } catch {
+    return emptyDraft();
   }
-  if (raw.page && typeof raw.page.url === 'string' && typeof raw.page.domain === 'string') {
-    draft.page = { url: raw.page.url, title: str(raw.page.title), domain: raw.page.domain };
-  }
-  if (Array.isArray(raw.people)) {
-    draft.people = raw.people
-      .filter((p) => p && typeof p.firstName === 'string' && typeof p.lastName === 'string')
-      .slice(0, MAX_PEOPLE)
-      .map((p) => {
-        const clean = { source: str(p.source), uncertain: p.uncertain === true, sources: {} };
-        for (const f of PERSON_FIELDS) clean[f] = str(p[f]);
-        if (p.sources && typeof p.sources === 'object') for (const f of ['email', 'phone', 'linkedin']) if (typeof p.sources[f] === 'string') clean.sources[f] = p.sources[f];
-        return clean;
-      });
-  }
-  if (Array.isArray(raw.notes)) draft.notes = raw.notes.filter((n) => typeof n === 'string').slice(0, 10);
-  return draft;
 }

@@ -1,51 +1,68 @@
-// Estrattore di Agria Scout.
+// Estrattore di Agria Scout: da una pagina ai dati che contiene, ognuno con la sua prova.
 //
-// Riceve la "fotografia" della pagina raccolta dal content script (content/collector.js) e
-// propone i campi Azienda e Contatto. Regola fissa: ogni valore viene dalla pagina, mai
-// inventato. Se un dato non c'è, il campo resta vuoto. Ogni valore porta con sé la fonte e,
-// quando è una deduzione debole, il segno «da verificare» (uncertain).
+// Riceve la "fotografia" della pagina raccolta da content/collector.js (la pagina aperta nel
+// browser oppure una pagina scaricata dalla scansione approfondita) e restituisce:
+//   facts   valori trovati (nomi, email, telefoni, WhatsApp, fax, indirizzi, dati societari,
+//           social, sistemi esterni) con metodo di rilevazione, punteggio, affidabilità
+//           ('high' = Alta affidabilità, 'check' = Da verificare) ed evidenza testuale;
+//   people  persone individuate, anche parziali ("Paolo – Host"), con i recapiti vicini al nome;
+//   signals parole di settore pesate, per proporre settore e tipo di struttura;
+//   links   link interni allo stesso sito, per scoprire le altre pagine.
+// La scelta fra valori di pagine diverse la fanno lib/siteData.js e lib/crmModel.js.
 //
-// Fonti, dalla più affidabile: dati strutturati (JSON-LD, microdati), link mailto:/tel:,
-// meta tag, titolo, testo di footer e intestazione, resto del testo visibile.
+// Regola fissa: ogni valore viene dalla pagina, mai inventato. Se un dato non c'è, non c'è.
 
 import {
   cleanText, domainFromUrl, formatPhone, normalizeEmail, normalizeLinkedin, normalizePhone,
-  normalizeUrl, normKey, sameSite,
+  normalizeUrl, normKey, sameSite, snippet,
 } from './validation.js';
-import { isProvinceCode, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
+import { isProvinceCode } from './italy.js';
+import { FIRST_NAMES } from './names.js';
+import { collectCompanyData, collectSignals, hasLegalSuffix, stripLegalSuffix } from './companyData.js';
 
-export const COMPANY_FIELDS = ['name', 'website', 'domain', 'email', 'phone', 'address', 'city', 'region'];
-export const CONTACT_FIELDS = ['firstName', 'lastName', 'role', 'email', 'phone', 'linkedin'];
-
-const MAX_ALTERNATIVES = 5;
-const MAX_PEOPLE = 8;
-
-const SOURCE = {
-  url: 'indirizzo della pagina',
+export const METHOD = {
   jsonld: 'dati strutturati JSON-LD',
   microdata: 'dati strutturati (microdati)',
   ogSiteName: 'meta tag og:site_name',
   metaBusiness: 'meta tag business',
   appName: 'meta tag application-name',
   title: 'titolo della pagina',
-  copyright: 'copyright nel footer',
+  copyright: 'copyright',
   mailto: 'link email',
   tel: 'link telefono',
+  whatsapp: 'link WhatsApp',
   linkedin: 'link LinkedIn',
-  addressTag: 'blocco indirizzo della pagina',
+  addressTag: 'blocco indirizzo',
   footer: 'testo del footer',
   header: "testo dell'intestazione",
   page: 'testo della pagina',
   emailName: 'email con il nome della persona',
   linkedinName: 'profilo LinkedIn con il nome della persona',
+  nearName: 'vicino al nome della persona',
 };
+const TEXT_METHOD = { footer: METHOD.footer, header: METHOD.header, page: METHOD.page };
 
-export function emptyField() {
-  return { value: '', source: '', uncertain: false, alternatives: [] };
+const CONTACT_KINDS = new Set(['email', 'phone', 'fax', 'whatsapp', 'address']);
+const CORPORATE_KINDS = new Set(['legalName', 'piva', 'cf', 'rea', 'cin', 'sdi']);
+
+// priorità delle fonti per tipo di pagina: Contatti per i recapiti, pagine legali per i dati societari
+function pageBonus(kind, pageType, extra) {
+  // il footer è uguale su tutte le pagine: il premio della pagina legale vale solo per il suo contenuto
+  if (extra.fromFooter) return 0;
+  if (CORPORATE_KINDS.has(kind) || (kind === 'email' && extra.pec)) {
+    return pageType === 'legal' ? 3 : pageType === 'contact' ? 1 : 0;
+  }
+  if (CONTACT_KINDS.has(kind)) {
+    if (pageType === 'contact') return 3;
+    if (['about', 'team', 'hospitality', 'home'].includes(pageType)) return 1;
+    return pageType === 'blog' ? -1 : 0;
+  }
+  if (kind === 'name') return pageType === 'home' ? 1 : 0;
+  return 0;
 }
 
-/** Da fotografia della pagina a { page, company, contact, people, notes, found }. */
-export function analyzeSnapshot(snapshot) {
+/** Da fotografia della pagina a { page, facts, people, signals, links, notes }. */
+export function analyzeSnapshot(snapshot, { pageType = 'other' } = {}) {
   if (!isObject(snapshot)) throw new TypeError('Dati della pagina mancanti.');
   const pageUrl = normalizeUrl(str(snapshot.url));
   if (!pageUrl) throw new TypeError('La pagina analizzata non ha un indirizzo web valido.');
@@ -53,38 +70,54 @@ export function analyzeSnapshot(snapshot) {
   const text = isObject(snapshot.text) ? snapshot.text : {};
   const ctx = {
     domain,
+    pageType,
     title: str(snapshot.title),
     meta: isObject(snapshot.meta) ? snapshot.meta : {},
     links: asArray(snapshot.links).filter(isObject),
     microdata: asArray(snapshot.microdata).filter(isObject),
     addressBlocks: asArray(snapshot.addresses).filter((s) => typeof s === 'string'),
+    headings: asArray(snapshot.headings).filter((s) => typeof s === 'string'),
+    resources: asArray(snapshot.resources).filter((s) => typeof s === 'string'),
     text: { header: str(text.header), footer: str(text.footer), page: str(text.page) },
     ld: flattenJsonLd(asArray(snapshot.jsonld)),
   };
+  // contenuto proprio della pagina, senza il footer (che di solito è un pezzo del testo intero)
+  ctx.text.main = ctx.text.footer && ctx.text.page.includes(ctx.text.footer) ? ctx.text.page.replace(ctx.text.footer, '\n') : ctx.text.page;
   ctx.orgs = rankOrganizations(ctx.ld, domain);
 
-  const emails = collectEmails(ctx);
-  const phones = collectPhones(ctx);
-  const place = findAddress(ctx);
-  const company = {
-    name: findCompanyName(ctx),
-    website: field(new URL(pageUrl).origin, SOURCE.url),
-    domain: field(domain, SOURCE.url),
-    email: emails.pool.best(),
-    phone: phones.pool.best(),
-    address: place.address,
-    city: place.city,
-    region: place.region,
+  const facts = [];
+  const add = (kind, value, { method, score, high = false, key, evidence = '', extra = {} }) => {
+    const v = cleanText(value, 400);
+    if (!v) return;
+    facts.push({
+      kind, value: v, key: key || normKey(v) || v, method,
+      score: score + pageBonus(kind, pageType, extra),
+      reliability: high ? 'high' : 'check',
+      evidence: cleanText(evidence, 240),
+      extra,
+    });
   };
-  const { contact, people } = findPeople(ctx, emails.list, phones.list);
-  const found = [...Object.values(company), ...Object.values(contact)].filter((f) => f.value).length;
+  collectNames(ctx, add);
+  collectEmails(ctx, add);
+  collectPhones(ctx, add);
+  collectAddresses(ctx, add);
+  collectCompanyData(ctx, add);
+
+  const notes = [];
+  const errors = Number(snapshot.jsonldErrors) || 0;
+  if (errors === 1) notes.push('Un blocco di dati strutturati non era leggibile ed è stato ignorato.');
+  if (errors > 1) notes.push(`${errors} blocchi di dati strutturati non erano leggibili e sono stati ignorati.`);
+  if (text.truncated === true) notes.push('Pagina molto lunga: è stata letta solo la prima parte del testo.');
+
   return {
-    page: { url: pageUrl, title: cleanText(ctx.title, 200), domain },
-    company,
-    contact,
-    people,
-    notes: buildNotes(snapshot, company, contact),
-    found,
+    page: { url: pageUrl, origin: new URL(pageUrl).origin, title: cleanText(ctx.title, 200), domain, type: pageType },
+    facts,
+    people: findPeople(ctx, facts),
+    signals: collectSignals(ctx),
+    links: ctx.links
+      .filter((l) => l.kind === 'web' && domainFromUrl(str(l.href)) === domain)
+      .map((l) => ({ url: str(l.href), text: cleanText(l.text || l.label, 120), zone: str(l.zone) })),
+    notes,
   };
 }
 
@@ -96,42 +129,7 @@ const asArray = (x) => (Array.isArray(x) ? x : x == null ? [] : [x]);
 const str = (x) => (typeof x === 'string' ? x : '');
 const unique = (list) => [...new Set(list.filter(Boolean))];
 const trimSeparators = (s) => s.replace(/^[\s,;:|•·–—-]+|[\s,;:|•·–—-]+$/gu, '');
-
-function field(value, source, uncertain = false, alternatives = []) {
-  const v = cleanText(value);
-  const alts = unique(alternatives.map((a) => cleanText(a))).filter((a) => a !== v).slice(0, MAX_ALTERNATIVES);
-  return v ? { value: v, source, uncertain, alternatives: alts } : { ...emptyField(), alternatives: alts };
-}
-
-// Raccolta di candidati per un campo: vince il punteggio più alto, a parità il primo trovato.
-// Lo stesso valore trovato da più fonti guadagna un piccolo bonus.
-function makePool() {
-  const items = new Map();
-  const weight = (item) => item.score + Math.min(item.hits - 1, 2) * 0.5;
-  return {
-    add(value, score, source, { key, uncertain = false } = {}) {
-      const v = cleanText(value);
-      if (!v) return;
-      const k = key || normKey(v) || v;
-      const current = items.get(k);
-      if (!current) {
-        items.set(k, { value: v, score, source, uncertain, order: items.size, hits: 1 });
-        return;
-      }
-      current.hits += 1;
-      if (score > current.score) Object.assign(current, { value: v, score, source, uncertain });
-    },
-    get size() {
-      return items.size;
-    },
-    best() {
-      const ranked = [...items.values()].sort((a, b) => weight(b) - weight(a) || a.order - b.order);
-      if (!ranked.length) return emptyField();
-      const [top, ...rest] = ranked;
-      return field(top.value, top.source, top.uncertain, rest.map((i) => i.value));
-    },
-  };
-}
+const isZone = (zone) => zone === 'footer' || zone === 'header';
 
 const LOWER_WORDS = new Set(['di', 'del', 'dello', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'al', 'in', 'sul', 'sulla', 'e']);
 
@@ -246,7 +244,7 @@ function rankOrganizations(nodes, domain) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// nome dell'azienda
+// nome commerciale
 
 const GENERIC_TITLE = /^(home|home ?page|pagina iniziale|benvenut[io]|welcome|contatti|contattaci|contatto|contacts?|contact us|chi siamo|about|about us|dove siamo|sito ufficiale|official (?:web)?site|news|blog|shop|negozio|privacy policy|cookie policy)$/i;
 const WELCOME_PREFIX = /^(?:benvenut[io]|welcome)\s+(?:(?:a|al|all['’]|alla|allo|ai|agli|in|nel|nella|presso|to|at)\s*)?/i;
@@ -256,6 +254,8 @@ const COMMON_WORDS = new Set([
   'casa', 'podere', 'fattoria', 'frantoio', 'oleificio', 'societa', 'home', 'vini', 'wine', 'winery',
   'resort', 'relais', 'masseria', 'casale', 'borgo', 'osteria', 'trattoria', 'italia', 'italy',
 ]);
+
+const MAIN_PAGES = new Set(['home', 'contact', 'about', 'team', 'hospitality']);
 
 function isPlausibleCompanyName(s) {
   return s.length >= 2 && s.length <= 100 && /\p{L}/u.test(s) && !GENERIC_TITLE.test(s) && !/^https?:/i.test(s);
@@ -287,106 +287,133 @@ const COPYRIGHT_STOP = /\s[-–|•·]\s|\s*\|\s*|,\s|\b(?:p\.?\s?iva|partita\s+
 
 function copyrightName(text) {
   const m = text.match(COPYRIGHT_RE);
-  if (!m) return '';
+  if (!m) return null;
   let name = m[1].split(COPYRIGHT_STOP)[0];
   name = name.replace(/^(?:(?:19|20)\d{2}\s*[-–]?\s*)+/, '').replace(/[\s,;:–-]+$/, '').trim();
   if (/[a-z]{4,}\.$/i.test(name)) name = name.slice(0, -1);
-  return isPlausibleCompanyName(name) && !/^(tutti|all rights)/i.test(name) ? name : '';
+  return isPlausibleCompanyName(name) && !/^(tutti|all rights)/i.test(name) ? { name, evidence: snippet(text, m.index, m[0].length) } : null;
 }
 
-function findCompanyName(ctx) {
-  const pool = makePool();
-  const add = (value, score, source, options) => {
+function collectNames(ctx, add) {
+  let found = 0;
+  const addName = (value, score, method, high, evidence) => {
     const v = cleanText(value, 120);
-    if (isPlausibleCompanyName(v)) pool.add(v, score, source, options);
+    if (!isPlausibleCompanyName(v)) return;
+    add('name', v, { method, score, high, evidence });
+    found += 1;
   };
   ctx.orgs.forEach((org, i) => {
-    add(ldText(org.node.name), i === 0 ? 10 : 6, SOURCE.jsonld);
-    add(ldText(org.node.legalName), i === 0 ? 7 : 5, SOURCE.jsonld);
+    const types = org.types.join(', ');
+    addName(ldText(org.node.name), i === 0 ? 10 : 6, METHOD.jsonld, true, `JSON-LD ${types}: name`);
+    const legal = ldText(org.node.legalName);
+    if (legal) add('legalName', legal, { method: METHOD.jsonld, score: 9, high: true, evidence: `JSON-LD ${types}: legalName` });
   });
-  add(str(ctx.meta['og:site_name']), 8, SOURCE.ogSiteName);
+  const siteName = str(ctx.meta['og:site_name']);
+  addName(siteName, 8, METHOD.ogSiteName, true, `og:site_name = ${siteName}`);
   const label = domainLabel(ctx.domain);
   const segments = titleSegments(ctx.title);
   const matching = segments.filter((s) => matchesDomain(s, label));
-  for (const s of matching) add(s, 7, SOURCE.title);
+  for (const s of matching) addName(s, 7, METHOD.title, false, `titolo: ${ctx.title}`);
   const copyright = copyrightName(ctx.text.footer || ctx.text.page.slice(-3000));
-  if (copyright) add(copyright, matchesDomain(copyright, label) ? 6 : 5, SOURCE.copyright);
-  add(str(ctx.meta['application-name']), 4, SOURCE.appName);
-  add(str(ctx.meta['apple-mobile-web-app-title']), 4, SOURCE.appName);
-  for (const n of ctx.ld) if (n.types.includes('WebSite')) add(ldText(n.node.name), 4, SOURCE.jsonld);
-  // ultima risorsa: il titolo che non somiglia al dominio, da verificare
-  if (!pool.size) {
-    segments.filter((s) => !matching.includes(s)).forEach((s, i) => add(s, i === 0 ? 3 : 1, SOURCE.title, { uncertain: true }));
+  if (copyright) {
+    const score = matchesDomain(copyright.name, label) ? 6 : 5;
+    if (hasLegalSuffix(copyright.name)) {
+      add('legalName', copyright.name, { method: METHOD.copyright, score, evidence: copyright.evidence });
+      addName(stripLegalSuffix(copyright.name), score - 1, METHOD.copyright, false, copyright.evidence);
+    } else {
+      addName(copyright.name, score, METHOD.copyright, false, copyright.evidence);
+    }
   }
-  return pool.best();
+  for (const key of ['application-name', 'apple-mobile-web-app-title']) {
+    const v = str(ctx.meta[key]);
+    addName(v, 4, METHOD.appName, false, `${key} = ${v}`);
+  }
+  for (const n of ctx.ld) if (n.types.includes('WebSite')) addName(ldText(n.node.name), 4, METHOD.jsonld, true, 'JSON-LD WebSite: name');
+  // ultima risorsa: il titolo che non somiglia al dominio, da verificare; solo nelle pagine
+  // principali (il titolo di un articolo o di una pagina legale non è il nome dell'azienda)
+  if (!found && MAIN_PAGES.has(ctx.pageType)) {
+    segments.filter((s) => !matching.includes(s)).forEach((s, i) => addName(s, i === 0 ? 3 : 1, METHOD.title, false, `titolo: ${ctx.title}`));
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
 // email
 
-const GENERIC_LOCAL = /^(info|informazioni|contatti|contatto|contact|contacts|hello|ciao|commerciale|sales|vendite|vendita|amministrazione|admin|segreteria|ufficio|office|booking|prenotazioni|prenota|reception|ordini|orders|shop|negozio|export|marketing|mail|posta|direzione|accoglienza|eventi|enoteca|wine|staff|agriturismo|cantina|hotel|welcome|support|assistenza|servizioclienti|customercare)$/;
+const GENERIC_LOCAL = /^(info|informazioni|contatti|contatto|contact|contacts|hello|ciao|commerciale|sales|vendite|vendita|amministrazione|admin|segreteria|ufficio|office|booking|prenotazioni|prenota|reception|ordini|orders|shop|negozio|export|marketing|mail|posta|direzione|accoglienza|eventi|enoteca|wine|staff|agriturismo|cantina|hotel|welcome|support|assistenza|servizioclienti|customercare|ristorante|spa|frontoffice|events)$/;
+const MAIN_LOCAL = /^(info|contatti|contact|hello)$/;
 const SYSTEM_LOCAL = /^(no-?reply|do-?not-?reply|mailer-daemon|postmaster|webmaster|privacy|dpo|gdpr|abuse)/;
 const IGNORED_EMAIL_DOMAINS = /(^|\.)(example\.(com|org|net|it)|esempio\.it|domain\.(com|it)|dominio\.it|tuodominio\.it|yourdomain\.com|email\.com|sentry\.io|wixpress\.com|test\.com)$/;
+const EMAIL_IN_TEXT = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}/gi;
 
-const isPec = (local, host) => /(^|\.)(pec|legalmail|arubapec|postacert|pecmail|cert)\./.test(host) || /(^|[._-])pec([._-]|$)/.test(local);
+export const isPec = (local, host) => /(^|\.)(pec|legalmail|arubapec|postacert|pecmail|cert)\./.test(host) || /(^|[._-])pec([._-]|$)/.test(local);
 
-function isPersonalEmail(email) {
-  const [local, host] = email.split('@');
-  return !GENERIC_LOCAL.test(local) && !SYSTEM_LOCAL.test(local) && !isPec(local, host);
+/** Tipo di email: 'pec' | 'system' | 'generic' | 'personal'. */
+export function emailCategory(email, { pec = false } = {}) {
+  const [local, host] = String(email).split('@');
+  if (pec || isPec(local, host || '')) return 'pec';
+  if (SYSTEM_LOCAL.test(local)) return 'system';
+  return GENERIC_LOCAL.test(local) ? 'generic' : 'personal';
 }
 
-function emailsInText(text) {
-  if (!text) return [];
-  const t = text
-    .replace(/\s*[[(]\s*(?:at|chiocciola)\s*[\])]\s*/gi, '@')
-    .replace(/\s*[[(]\s*(?:dot|punto)\s*[\])]\s*/gi, '.');
-  return t.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}/gi) || [];
-}
+const deobfuscate = (text) => text
+  .replace(/\s*[[(]\s*(?:at|chiocciola)\s*[\])]\s*/gi, '@')
+  .replace(/\s*[[(]\s*(?:dot|punto)\s*[\])]\s*/gi, '.');
 
-function collectEmails(ctx) {
-  const pool = makePool();
-  const all = new Set();
-  const add = (raw, base, source, zone = '') => {
+function collectEmails(ctx, add) {
+  const push = (raw, base, method, { zone = '', evidence = '', pecLabel = false } = {}) => {
     const email = normalizeEmail(raw);
     if (!email) return;
     const [local, host] = email.split('@');
     if (IGNORED_EMAIL_DOMAINS.test(host)) return;
+    const pec = pecLabel || isPec(local, host);
     let score = base;
     if (sameSite(host, ctx.domain)) score += 4;
     if (GENERIC_LOCAL.test(local)) score += 2;
-    if (isPec(local, host)) score -= 4;
+    if (MAIN_LOCAL.test(local)) score += 1; // la casella generale per eccellenza
+    if (pec) score -= 4;
     if (SYSTEM_LOCAL.test(local)) score -= 5;
-    if (zone === 'footer' || zone === 'header') score += 1;
-    pool.add(email, score, source, { key: email });
-    all.add(email);
+    if (isZone(zone)) score += 1;
+    add('email', email, { method, score, high: true, key: email, evidence, extra: { pec } });
   };
   ctx.orgs.forEach((org, i) => {
-    for (const e of ldTexts(org.node.email)) add(e, i === 0 ? 7 : 5, SOURCE.jsonld);
-    for (const cp of asArray(org.node.contactPoint)) if (isObject(cp)) for (const e of ldTexts(cp.email)) add(e, 5, SOURCE.jsonld);
+    for (const e of ldTexts(org.node.email)) push(e, i === 0 ? 7 : 5, METHOD.jsonld, { evidence: `JSON-LD ${org.types.join(', ')}: email` });
+    for (const cp of asArray(org.node.contactPoint)) if (isObject(cp)) for (const e of ldTexts(cp.email)) push(e, 5, METHOD.jsonld, { evidence: 'JSON-LD contactPoint: email' });
   });
-  for (const m of ctx.microdata) if (m.prop === 'email') add(str(m.value), 5, SOURCE.microdata);
-  add(str(ctx.meta['business:contact_data:email']), 5, SOURCE.metaBusiness);
+  for (const m of ctx.microdata) if (m.prop === 'email') push(str(m.value), 5, METHOD.microdata, { evidence: 'itemprop="email"' });
+  push(str(ctx.meta['business:contact_data:email']), 5, METHOD.metaBusiness, { evidence: 'business:contact_data:email' });
   for (const link of ctx.links) {
     if (link.kind !== 'mailto') continue;
-    for (const part of str(link.href).replace(/^mailto:/i, '').split('?')[0].split(/[,;]/)) add(part, 4, SOURCE.mailto, link.zone);
+    const label = `${str(link.text)} ${str(link.label)}`;
+    for (const part of str(link.href).replace(/^mailto:/i, '').split('?')[0].split(/[,;]/)) {
+      push(part, 4, METHOD.mailto, { zone: link.zone, evidence: cleanText(`${label} → ${part}`, 200), pecLabel: /\bpec\b/i.test(label) });
+    }
   }
-  for (const [zone, source] of [['footer', SOURCE.footer], ['header', SOURCE.header], ['page', SOURCE.page]]) {
-    for (const e of emailsInText(ctx.text[zone])) add(e, 2, source, zone);
+  for (const [zone, method] of Object.entries(TEXT_METHOD)) {
+    const text = deobfuscate(ctx.text[zone]);
+    for (const m of text.matchAll(EMAIL_IN_TEXT)) {
+      // l'etichetta "PEC:" vale solo per l'email che la segue subito, non per la successiva
+      const before = text.slice(Math.max(0, m.index - 40), m.index);
+      push(m[0], 2, method, { zone, evidence: snippet(text, m.index, m[0].length), pecLabel: /(?:(?<![\w@.-])pec(?![\w@-])|posta\s+elettronica\s+certificata)[^@\n]{0,12}$/i.test(before) });
+    }
   }
-  return { pool, list: [...all] };
 }
 
 // ---------------------------------------------------------------------------------------------
-// telefono
+// telefono, cellulare, WhatsApp, fax
 
 // (?!\d): il numero finisce dove finiscono le cifre, senza tagliare l'ultimo gruppo
 const PHONE_NUMBER = String.raw`((?:\(?(?:\+|00)\d{2}\)?[ .]?)?\d{2,5}(?:[ .\/-]?\d{2,6}){1,4})(?!\d)`;
 // nel testo libero un numero conta solo dopo una parola come "Tel." o con il prefisso +39
 const PHONE_AFTER_KEYWORD = new RegExp(
-  String.raw`(?:\b(?:tel(?:efono|ephone)?|phone|cell(?:ulare)?|mobile|mob|whatsapp|t)\b\.?(?:[ \t]*(?:\/|e|&)[ \t]*fax\.?)?[ \t]*[:.]?[ \t]*|[☎📞✆][ \t]*)${PHONE_NUMBER}`,
+  String.raw`(?:\b(tel(?:efono|ephone)?|phone|cell(?:ulare)?|mobile|mob|whats\s?app|t)\b\.?(?:[ \t]*(?:\/|e|&)[ \t]*(fax)\.?)?[ \t]*[:.]?[ \t]*|[☎📞✆][ \t]*)${PHONE_NUMBER}`,
   'giu',
 );
+// "F. 075…" è un fax, "C.F. 0123…" no
+const FAX_AFTER_KEYWORD = new RegExp(String.raw`\b(?:fax|(?<!c\.[ \t]?)f)\b\.?[ \t]*[:.]?[ \t]*${PHONE_NUMBER}`, 'giu');
+// dopo queste etichette c'è un numero societario, mai un telefono
+const ID_LABEL_BEFORE = /(p\.?\s?iva|partita\s+iva|c\.\s?f\.?|fiscale|r\.?\s?e\.?\s?a\.?|vat|cin|sdi)[\s:.n°-]*$/i;
 const PHONE_INTERNATIONAL = /(?<![\d+])((?:\+|00)39[ .]?\d{2,5}(?:[ .\/-]?\d{2,6}){1,4})(?!\d)/g;
+const BARE_MOBILE = /(?<![\d+])((?:\+39[ .]?)?3\d{2}[ .]?\d{3}[ .]?\d{3,4})(?!\d)/g;
 
 // "075 8123456 06081" → "075 8123456": la cifra in più appartiene ad altro (es. CAP)
 function longestValidPrefix(raw) {
@@ -398,44 +425,73 @@ function longestValidPrefix(raw) {
   return '';
 }
 
+/** Numeri nel testo: [{ number, kind: 'phone' | 'whatsapp' | 'fax', index, length }]. */
 function phonesInText(text) {
   if (!text) return [];
   const out = [];
-  for (const m of text.matchAll(PHONE_AFTER_KEYWORD)) out.push(longestValidPrefix(m[1]));
-  for (const m of text.matchAll(PHONE_INTERNATIONAL)) {
-    const before = text.slice(Math.max(0, m.index - 12), m.index);
-    if (!/fax|\bf\.?\s*:?\s*$/i.test(before)) out.push(longestValidPrefix(m[1]));
+  const push = (raw, kind, m) => {
+    const at = m.index + m[0].length - raw.length;
+    if (ID_LABEL_BEFORE.test(text.slice(Math.max(0, at - 25), at))) return;
+    const number = longestValidPrefix(raw);
+    if (number) out.push({ number, kind, index: m.index, length: m[0].length });
+  };
+  for (const m of text.matchAll(PHONE_AFTER_KEYWORD)) {
+    push(m[3], /^whats/i.test(m[1] || '') ? 'whatsapp' : 'phone', m);
+    if (m[2]) push(m[3], 'fax', m);
   }
-  return out.filter(Boolean);
+  for (const m of text.matchAll(FAX_AFTER_KEYWORD)) push(m[1], 'fax', m);
+  for (const m of text.matchAll(PHONE_INTERNATIONAL)) {
+    const before = text.slice(Math.max(0, m.index - 15), m.index);
+    if (/fax|\bf\.?\s*:?\s*$/i.test(before)) continue; // già preso come fax
+    push(m[1], /whats\s?app/i.test(before) ? 'whatsapp' : 'phone', m);
+  }
+  return out;
 }
 
-function collectPhones(ctx) {
-  const pool = makePool();
-  const all = new Map();
-  const add = (raw, base, source, zone = '') => {
+function whatsappNumber(href) {
+  try {
+    const url = new URL(href);
+    const raw = /^whatsapp:/i.test(href) || !/(^|\.)wa\.me$/i.test(url.hostname)
+      ? url.searchParams.get('phone') || ''
+      : url.pathname.replace(/\//g, '');
+    const digits = raw.replace(/[^\d+]/g, '');
+    return digits && !digits.startsWith('+') && digits.length >= 10 ? `+${digits}` : digits;
+  } catch {
+    return '';
+  }
+}
+
+function collectPhones(ctx, add) {
+  const push = (raw, kind, base, method, { zone = '', evidence = '', high = true } = {}) => {
     const compact = normalizePhone(raw);
     if (!compact) return;
-    const display = formatPhone(compact);
-    pool.add(display, base + (zone === 'footer' || zone === 'header' ? 1 : 0), source, { key: compact });
-    all.set(compact, display);
+    add(kind, formatPhone(compact), { method, score: base + (isZone(zone) ? 1 : 0), high, key: compact, evidence, extra: { mobile: compact.startsWith('+393') } });
   };
   ctx.orgs.forEach((org, i) => {
-    for (const t of ldTexts(org.node.telephone)) add(t, i === 0 ? 7 : 5, SOURCE.jsonld);
-    for (const cp of asArray(org.node.contactPoint)) if (isObject(cp)) for (const t of ldTexts(cp.telephone)) add(t, 5, SOURCE.jsonld);
+    for (const t of ldTexts(org.node.telephone)) push(t, 'phone', i === 0 ? 7 : 5, METHOD.jsonld, { evidence: `JSON-LD ${org.types.join(', ')}: telephone` });
+    for (const t of ldTexts(org.node.faxNumber)) push(t, 'fax', 6, METHOD.jsonld, { evidence: 'JSON-LD faxNumber' });
+    for (const cp of asArray(org.node.contactPoint)) if (isObject(cp)) for (const t of ldTexts(cp.telephone)) push(t, 'phone', 5, METHOD.jsonld, { evidence: 'JSON-LD contactPoint: telephone' });
   });
-  for (const m of ctx.microdata) if (m.prop === 'telephone') add(str(m.value), 5, SOURCE.microdata);
-  add(str(ctx.meta['business:contact_data:phone_number']), 5, SOURCE.metaBusiness);
+  for (const m of ctx.microdata) if (m.prop === 'telephone') push(str(m.value), 'phone', 5, METHOD.microdata, { evidence: 'itemprop="telephone"' });
+  push(str(ctx.meta['business:contact_data:phone_number']), 'phone', 5, METHOD.metaBusiness, { evidence: 'business:contact_data:phone_number' });
   for (const link of ctx.links) {
-    if (link.kind === 'tel' && !/fax/i.test(`${str(link.text)} ${str(link.label)}`)) add(str(link.href), 4, SOURCE.tel, link.zone);
+    const label = `${str(link.text)} ${str(link.label)}`;
+    const evidence = cleanText(`${label} → ${str(link.href)}`, 200);
+    if (link.kind === 'tel') {
+      const kind = /fax/i.test(label) ? 'fax' : /whats\s?app/i.test(label) ? 'whatsapp' : 'phone';
+      push(str(link.href), kind, 4, METHOD.tel, { zone: link.zone, evidence });
+    } else if (link.kind === 'whatsapp') {
+      push(whatsappNumber(str(link.href)), 'whatsapp', 5, METHOD.whatsapp, { zone: link.zone, evidence });
+    }
   }
-  for (const [zone, source] of [['footer', SOURCE.footer], ['header', SOURCE.header], ['page', SOURCE.page]]) {
-    for (const p of phonesInText(ctx.text[zone])) add(p, 2, source, zone);
+  for (const [zone, method] of Object.entries(TEXT_METHOD)) {
+    const text = ctx.text[zone];
+    for (const p of phonesInText(text)) push(p.number, p.kind, 2, method, { zone, evidence: snippet(text, p.index, p.length) });
   }
-  return { pool, list: [...all.values()] };
 }
 
 // ---------------------------------------------------------------------------------------------
-// indirizzo, città, regione
+// indirizzi
 
 const STREET_RE = /(?:^|[^\p{L}])(via|viale|v\.le|piazza|p\.zza|p\.za|piazzale|p\.le|piazzetta|corso|c\.so|largo|vicolo|vico|strada|str\.|località|loc\.|frazione|fraz\.|contrada|c\.da|borgo|vocabolo|voc\.|podere|lungomare|lungarno|salita|traversa|cascina)(?=[\s.,])/giu;
 // CAP + città + sigla della provincia: "06081 Assisi (PG)", "06081 Assisi - PG", "06081 Assisi PG"
@@ -443,6 +499,7 @@ const CAP_CITY_PROVINCE = /^(\d{5})[ \t]*[-–,]?[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[
 // CAP + città senza provincia: vale solo se c'è anche la via
 const CAP_CITY = /^(\d{5})[ \t]*[-–,]?[ \t]*(\p{Lu}[\p{L}'’.-]*(?:[ \t]+(?:(?:di|del|della|dei|degli|delle|al|in|sul|sulla)[ \t]+)?\p{Lu}[\p{L}'’.-]*){0,4})/u;
 const CITY_TAIL = /^(tel|telefono|fax|email|e-mail|mail|cell|italia|italy|it|p|partita|piva|c|cf|codice|whatsapp|orari)$/i;
+const LEGAL_SEAT = /sede\s+legale|registered\s+office/i;
 
 function streetBefore(text) {
   const tail = text.slice(-100);
@@ -459,7 +516,7 @@ function cityWithoutTail(city) {
   return words.join(' ');
 }
 
-function addressesInText(text, baseScore, source, out) {
+function addressesInText(text, baseScore, method, out) {
   if (!text) return;
   const lines = text.split(/\n+/).map((l) => l.replace(/[ \t ]+/g, ' ').trim()).filter(Boolean);
   lines.forEach((line, i) => {
@@ -479,16 +536,28 @@ function addressesInText(text, baseScore, source, out) {
       }
       if (!city) continue;
       const before = line.slice(0, m.index);
-      const street = streetBefore(before) || (i > 0 && !trimSeparators(before) ? streetBefore(lines[i - 1]) : '');
+      const fromPreviousLine = i > 0 && !trimSeparators(before);
+      const street = streetBefore(before) || (fromPreviousLine ? streetBefore(lines[i - 1]) : '');
       if (!province && !street) continue;
       city = smartCase(city);
       const address = [street, `${m[0]} ${city}${province ? ` (${province})` : ''}`].filter(Boolean).join(', ');
-      out.push({ address, city, province, regionText: '', score: baseScore + (street ? 1 : 0) + (province ? 1 : 0), source, uncertain: !street || !province });
+      const context = `${fromPreviousLine ? lines[i - 1] : ''} ${before}`.slice(-160);
+      out.push({
+        address, street, cap: m[0], city, province, regionText: '', country: '',
+        score: baseScore + (street ? 1 : 0) + (province ? 1 : 0),
+        method, high: Boolean(street && province), legalSeat: LEGAL_SEAT.test(context),
+        evidence: cleanText(`${fromPreviousLine ? `${lines[i - 1]} · ` : ''}${line}`, 240),
+      });
     }
   });
 }
 
-function composeAddress(parts, score, source) {
+function countryOf(value) {
+  const v = cleanText(value, 60);
+  return /^(it|ita|italy|italia)$/i.test(v) ? 'Italia' : v;
+}
+
+function composeAddress(parts, score, method, evidence) {
   const street = cleanText(parts.street, 120);
   const cap = cleanText(parts.cap, 10);
   const city = smartCase(cleanText(parts.city, 60));
@@ -500,84 +569,69 @@ function composeAddress(parts, score, source) {
   }
   const place = [cap, city].filter(Boolean).join(' ') + (province ? ` (${province})` : '');
   const address = cap && street.includes(cap) ? street : [street, place].filter(Boolean).join(', ');
-  return address ? { address, city, province, regionText, score, source, uncertain: false } : null;
+  if (!address) return null;
+  return { address, street, cap, city, province, regionText, country: countryOf(parts.country), score, method, high: true, legalSeat: false, evidence };
 }
 
-function regionOf(candidate) {
-  if (candidate.regionText) {
-    const region = normalizeRegion(candidate.regionText);
-    if (region) return field(region, candidate.source);
-    const code = candidate.regionText.toUpperCase();
-    if (isProvinceCode(code)) return field(regionFromProvince(code), `dedotta dalla provincia (${code})`);
-    const byName = provinceFromName(candidate.regionText);
-    if (byName) return field(regionFromProvince(byName), `dedotta dalla provincia di ${candidate.regionText}`);
-    return field(candidate.regionText, candidate.source); // regione estera o non riconosciuta: com'è scritta
-  }
-  if (candidate.province) return field(regionFromProvince(candidate.province), `dedotta dalla provincia (${candidate.province})`);
-  const capital = provinceFromName(candidate.city);
-  if (capital) return field(regionFromProvince(capital), 'dedotta dalla città (capoluogo di provincia)');
-  return null;
-}
-
-function findAddress(ctx) {
-  const candidates = [];
-  const push = (c) => c && candidates.push(c);
+function collectAddresses(ctx, add) {
+  const found = [];
+  const push = (c) => c && found.push(c);
   ctx.orgs.forEach((org, i) => {
     for (const a of asArray(org.node.address)) {
       const score = i === 0 ? 8 : 6;
+      const evidence = `JSON-LD ${org.types.join(', ')}: address`;
       if (typeof a === 'string') {
-        const before = candidates.length;
-        addressesInText(decodeEntities(a), score, SOURCE.jsonld, candidates);
-        if (candidates.length === before) push(composeAddress({ street: decodeEntities(a) }, score, SOURCE.jsonld));
+        const before = found.length;
+        addressesInText(decodeEntities(a), score, METHOD.jsonld, found);
+        if (found.length === before) push(composeAddress({ street: decodeEntities(a) }, score, METHOD.jsonld, evidence));
       } else if (isObject(a)) {
+        const country = isObject(a.addressCountry) ? ldText(a.addressCountry.name) : ldText(a.addressCountry);
         push(composeAddress({
-          street: ldText(a.streetAddress), cap: ldText(a.postalCode), city: ldText(a.addressLocality), region: ldText(a.addressRegion),
-        }, score, SOURCE.jsonld));
+          street: ldText(a.streetAddress), cap: ldText(a.postalCode), city: ldText(a.addressLocality), region: ldText(a.addressRegion), country,
+        }, score, METHOD.jsonld, evidence));
       }
     }
   });
   const md = (prop) => str(ctx.microdata.find((m) => m.prop === prop)?.value);
   if (md('streetAddress') || md('addressLocality')) {
-    push(composeAddress({ street: md('streetAddress'), cap: md('postalCode'), city: md('addressLocality'), region: md('addressRegion') }, 6, SOURCE.microdata));
+    push(composeAddress({ street: md('streetAddress'), cap: md('postalCode'), city: md('addressLocality'), region: md('addressRegion') }, 6, METHOD.microdata, 'itemprop="address"'));
   }
   const mb = (k) => str(ctx.meta[`business:contact_data:${k}`]);
   if (mb('street_address') || mb('locality')) {
-    push(composeAddress({ street: mb('street_address'), cap: mb('postal_code'), city: mb('locality'), region: mb('region') }, 5, SOURCE.metaBusiness));
+    push(composeAddress({ street: mb('street_address'), cap: mb('postal_code'), city: mb('locality'), region: mb('region') }, 5, METHOD.metaBusiness, 'business:contact_data'));
   }
-  for (const block of ctx.addressBlocks) addressesInText(block, 4, SOURCE.addressTag, candidates);
-  addressesInText(ctx.text.footer, 3, SOURCE.footer, candidates);
-  addressesInText(ctx.text.header, 2, SOURCE.header, candidates);
-  addressesInText(ctx.text.page, 1, SOURCE.page, candidates);
+  for (const block of ctx.addressBlocks) addressesInText(block, 4, METHOD.addressTag, found);
+  addressesInText(ctx.text.footer, 3, METHOD.footer, found);
+  addressesInText(ctx.text.header, 2, METHOD.header, found);
+  addressesInText(ctx.text.page, 1, METHOD.page, found);
 
-  if (!candidates.length) return { address: emptyField(), city: emptyField(), region: emptyField() };
-  const ranked = candidates.map((c, order) => ({ ...c, order })).sort((a, b) => b.score - a.score || a.order - b.order);
-  const best = ranked[0];
-  const withCity = best.city ? best : ranked.find((c) => c.city);
-  const region = regionOf(best) || (withCity && withCity !== best ? regionOf(withCity) : null) || emptyField();
-  return {
-    address: field(best.address, best.source, best.uncertain, ranked.map((c) => c.address)),
-    city: withCity ? field(withCity.city, withCity.source, withCity.uncertain, ranked.map((c) => c.city)) : emptyField(),
-    region,
-  };
+  for (const c of found) {
+    const { address, score, method, high, evidence, ...parts } = c;
+    add('address', address, { method, score, high, evidence, extra: parts });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
 // persone
 
-// [ruolo, priorità]: 1 = chi decide, 2 = direzione, 3 = commerciale e marketing, 4 = altri ruoli
+// [ruolo, priorità]: 1 = chi decide, 2 = direzione e accoglienza, 3 = commerciale e marketing, 4 = altri ruoli
 const ROLES = [
-  ['titolare', 1], ['contitolare', 1], ['co-titolare', 1], ['proprietario', 1], ['proprietaria', 1],
-  ['fondatore', 1], ['fondatrice', 1], ['co-fondatore', 1], ['co-fondatrice', 1],
+  ['titolare', 1], ['titolari', 1], ['contitolare', 1], ['co-titolare', 1], ['proprietario', 1], ['proprietaria', 1],
+  ['proprietari', 1], ['fondatore', 1], ['fondatrice', 1], ['co-fondatore', 1], ['co-fondatrice', 1],
   ['socio fondatore', 1], ['socia fondatrice', 1], ['amministratore unico', 1], ['amministratrice unica', 1],
   ['amministratore delegato', 1], ['amministratrice delegata', 1], ['amministratore', 1], ['amministratrice', 1],
-  ['legale rappresentante', 1], ['presidente', 1], ['owner', 1], ['founder', 1], ['co-founder', 1], ['ceo', 1],
+  ['legale rappresentante', 1], ['presidente', 1], ['padrone di casa', 1], ['padrona di casa', 1],
+  ['owner', 1], ['founder', 1], ['co-founder', 1], ['ceo', 1],
   ['direttore generale', 2], ['direttrice generale', 2], ['general manager', 2], ['managing director', 2],
+  ['hotel manager', 2], ['host', 2], ['director', 2],
   ['direttore commerciale', 3], ['direttrice commerciale', 3], ['direttore marketing', 3], ['direttrice marketing', 3],
   ['responsabile commerciale', 3], ['responsabile vendite', 3], ['responsabile marketing', 3],
   ['responsabile export', 3], ['sales manager', 3], ['marketing manager', 3], ['export manager', 3],
+  ['revenue manager', 3], ['event manager', 3], ['commerciale', 3],
   ['direttore', 4], ['direttrice', 4], ['responsabile', 4], ['vicepresidente', 4], ['socio', 4], ['socia', 4],
-  ['enologo', 4], ['enologa', 4], ['agronomo', 4], ['agronoma', 4], ['chef', 4], ['gestore', 4],
-  ['gestrice', 4], ['referente', 4], ['manager', 4],
+  ['enologo', 4], ['enologa', 4], ['agronomo', 4], ['agronoma', 4], ['chef', 4], ['sommelier', 4], ['gestore', 4],
+  ['gestrice', 4], ['referente', 4], ['manager', 4], ['receptionist', 4], ['reception', 4], ['front office', 4],
+  ['concierge', 4],
 ];
 const ROLE_PRIORITY = new Map(ROLES.map(([r, p]) => [normKey(r), p]));
 
@@ -588,11 +642,12 @@ const caseless = (phrase) => phrase
   .replace(/ /g, '[ \\t]+');
 const ROLE = ROLES.map(([r]) => r).sort((a, b) => b.length - a.length).map(caseless).join('|');
 const NAME_WORD = String.raw`(?:\p{Lu}['’]\p{Lu}\p{Ll}+|\p{Lu}\p{Ll}+(?:-\p{Lu}\p{Ll}+)?|\p{Lu}['’]\p{Lu}{2,}|\p{Lu}{2,}(?:-\p{Lu}{2,})?)`;
-const NAME = String.raw`${NAME_WORD}(?:[ \t]+${NAME_WORD}){1,3}`;
-// "Titolare: Mario Rossi" / "Titolare\nMario Rossi"
-const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*[:\-–—,]?[ \t]*(?:\n[ \t]*){0,2}(${NAME})`, 'gu');
-// "Mario Rossi – Titolare" / "Mario Rossi (titolare)" / "Mario Rossi\nTitolare"
-const NAME_THEN_ROLE = new RegExp(String.raw`(${NAME})[ \t]*(?:[,\-–—|:(/][ \t]*|(?:\n[ \t]*){1,2})(${ROLE})(?!\p{L})`, 'gu');
+// da 1 a 4 parole: il solo nome di battesimo vale solo se è un nome noto (vedi nameTokens)
+const NAME = String.raw`${NAME_WORD}(?:[ \t]+${NAME_WORD}){0,3}`;
+// "Titolare: Mario Rossi" / "Titolare\nMario Rossi" / "Host: Paolo"
+const ROLE_THEN_NAME = new RegExp(String.raw`(?<!\p{L})(${ROLE})(?!\p{L})[ \t]*[:\-–—,]?[ \t]*(?:\n[ \t]*){0,2}(${NAME})(?!\p{L})`, 'gu');
+// "Mario Rossi – Titolare" / "Mario Rossi (titolare)" / "Mario Rossi\nTitolare" / "Paolo – Host"
+const NAME_THEN_ROLE = new RegExp(String.raw`(?<!\p{L})(${NAME})[ \t]*(?:[,\-–—|:(/][ \t]*|(?:\n[ \t]*){1,2})(${ROLE})(?!\p{L})`, 'gu');
 
 // parole che compaiono vicino ai ruoli ma non sono nomi di persona
 const NOT_NAME = new Set([
@@ -612,17 +667,19 @@ const NOT_NAME = new Set([
   'linkedin', 'youtube', 'twitter', 'tiktok', 'google', 'maps', 'mappa', 'dove', 'come', 'raggiungerci',
   'benvenuti', 'benvenuto', 'buongiorno', 'grazie', 'via', 'viale', 'piazza', 'corso', 'localita', 'strada',
   'frazione', 'san', 'santa', 'santo', 'sant', 'italia', 'italy',
-  'titolare', 'contitolare', 'proprietario', 'proprietaria', 'fondatore', 'fondatrice', 'cofondatore', 'cofondatrice',
-  'socio', 'socia', 'amministratore', 'amministratrice', 'unico', 'unica', 'delegato', 'delegata', 'legale',
-  'rappresentante', 'presidente', 'vicepresidente', 'direttore', 'direttrice', 'generale', 'responsabile', 'manager',
-  'general', 'managing', 'director', 'sales', 'export', 'owner', 'founder', 'ceo', 'enologo', 'enologa', 'agronomo',
-  'agronoma', 'chef', 'gestore', 'gestrice', 'referente', 'vendite',
+  'titolare', 'titolari', 'contitolare', 'proprietario', 'proprietaria', 'proprietari', 'fondatore', 'fondatrice',
+  'cofondatore', 'cofondatrice', 'socio', 'socia', 'amministratore', 'amministratrice', 'unico', 'unica', 'delegato',
+  'delegata', 'legale', 'rappresentante', 'presidente', 'vicepresidente', 'direttore', 'direttrice', 'generale',
+  'responsabile', 'manager', 'general', 'managing', 'director', 'sales', 'export', 'owner', 'founder', 'ceo',
+  'enologo', 'enologa', 'agronomo', 'agronoma', 'chef', 'gestore', 'gestrice', 'referente', 'vendite', 'host',
+  'sommelier', 'revenue', 'event', 'concierge', 'receptionist', 'front', 'office', 'padrone', 'padrona',
 ]);
 const PARTICLES = new Set(['de', 'di', 'del', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'dalle', 'dello', 'lo', 'la', 'le', 'li', 'van', 'von', 'du', 'des']);
 
-// Parole del nome ripulite, oppure null se non sembra un nome e cognome.
+// Parole del nome ripulite, oppure null se non sembra un nome di persona.
 // anchor 'start': il nome segue il ruolo (si tiene l'inizio); 'end': lo precede (si tiene la fine).
-function nameTokens(raw, anchor = '') {
+// Una parola sola vale solo se è un nome di battesimo noto (persona parziale, senza cognome).
+function nameTokens(raw, anchor = '', { allowSingle = false } = {}) {
   let words = cleanText(raw, 80).split(' ').map((w) => w.replace(/[.,;:]+$/, '')).filter(Boolean);
   const stop = (w) => NOT_NAME.has(normKey(w));
   if (anchor === 'start') {
@@ -637,12 +694,14 @@ function nameTokens(raw, anchor = '') {
     while (words.length && stop(words.at(-1))) words.pop();
   }
   while (words.length && PARTICLES.has(words[0].toLowerCase())) words.shift();
-  if (words.length < 2 || words.length > 4) return null;
+  if (words.length === 1 && !(allowSingle && FIRST_NAMES.has(normKey(words[0])))) return null;
+  if (words.length < 1 || words.length > 4) return null;
   if (words.some((w) => stop(w) || !/^\p{Lu}/u.test(w) || normKey(w).length < 2)) return null;
   return words.map(smartCase);
 }
 
 function splitName(words) {
+  if (words.length === 1) return { firstName: words[0], lastName: '' };
   const particle = words.findIndex((w, i) => i > 0 && PARTICLES.has(w.toLowerCase()));
   const cut = particle > 0 ? particle : words.length >= 3 ? 2 : 1;
   return { firstName: words.slice(0, cut).join(' '), lastName: words.slice(cut).join(' ') };
@@ -662,9 +721,18 @@ function displayRole(raw) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// telefono fisso o cellulare a seconda del numero
+function phoneFields(display, method) {
+  if (!display) return {};
+  const compact = normalizePhone(display);
+  return compact.startsWith('+393')
+    ? { mobile: formatPhone(compact), fieldMethods: { mobile: method } }
+    : { phone: formatPhone(compact), fieldMethods: { phone: method } };
+}
+
 const person = (p) => ({
-  firstName: '', lastName: '', role: '', priority: 5, email: '', phone: '', linkedin: '',
-  source: '', sources: {}, uncertain: true, order: 0, ...p,
+  firstName: '', lastName: '', role: '', priority: 5, email: '', phone: '', mobile: '', whatsapp: '', linkedin: '',
+  method: '', reliability: 'check', evidence: '', order: 0, ...p, fieldMethods: { ...(p.fieldMethods || {}) },
 });
 
 function peopleFromJsonLd(nodes, out) {
@@ -676,21 +744,23 @@ function peopleFromJsonLd(nodes, out) {
     const node = n.node;
     let firstName = ldText(node.givenName);
     let lastName = ldText(node.familyName);
-    if (!firstName || !lastName) {
-      const words = nameTokens(ldText(node.name));
+    if (!firstName) {
+      const words = nameTokens(ldText(node.name), '', { allowSingle: true });
       if (!words) return;
       ({ firstName, lastName } = splitName(words));
     }
     const role = ldText(node.jobTitle) || (links.some((l) => l.startsWith('founder')) ? 'Fondatore' : '');
     const linkedin = [...ldTexts(node.sameAs), ...ldTexts(node.url)].map(normalizeLinkedin).find((li) => li?.kind === 'profile')?.url || '';
     const phone = normalizePhone(ldText(node.telephone));
+    const phones = phoneFields(phone ? formatPhone(phone) : '', METHOD.jsonld);
+    const email = normalizeEmail(ldText(node.email));
     out.push(person({
-      firstName, lastName, role, linkedin,
-      email: normalizeEmail(ldText(node.email)),
-      phone: phone ? formatPhone(phone) : '',
+      firstName, lastName, role, linkedin, email, ...phones,
+      fieldMethods: { ...phones.fieldMethods, ...(email ? { email: METHOD.jsonld } : {}), ...(linkedin ? { linkedin: METHOD.jsonld } : {}) },
       priority: role ? rolePriority(role) : staff ? 3 : 5,
-      source: SOURCE.jsonld,
-      uncertain: !staff && !role,
+      method: METHOD.jsonld,
+      reliability: staff || role ? 'high' : 'check',
+      evidence: `JSON-LD Person${links.filter(Boolean).length ? ` (${links.filter(Boolean).join(', ')})` : ''}: ${cleanText(`${firstName} ${lastName}`)}`,
       order: i,
     }));
   });
@@ -701,14 +771,58 @@ function peopleFromLinks(links, out) {
     const words = nameTokens(str(link.text) || str(link.label));
     if (!words) return;
     const { firstName, lastName } = splitName(words);
+    const evidence = cleanText(`${str(link.text) || str(link.label)} → ${str(link.href)}`, 200);
     if (link.kind === 'mailto') {
       const email = normalizeEmail(str(link.href));
-      if (email) out.push(person({ firstName, lastName, email, source: SOURCE.mailto, order: 500 + i }));
+      if (email) out.push(person({ firstName, lastName, email, fieldMethods: { email: METHOD.mailto }, method: METHOD.mailto, evidence, order: 500 + i }));
     } else if (link.kind === 'linkedin') {
       const li = normalizeLinkedin(str(link.href));
-      if (li?.kind === 'profile') out.push(person({ firstName, lastName, linkedin: li.url, source: SOURCE.linkedin, order: 500 + i }));
+      if (li?.kind === 'profile') out.push(person({ firstName, lastName, linkedin: li.url, fieldMethods: { linkedin: METHOD.linkedin }, method: METHOD.linkedin, evidence, order: 500 + i }));
     }
   });
+}
+
+// recapiti scritti subito dopo una persona (stessa scheda del team): email personale, cellulare,
+// WhatsApp; un numero fisso solo sulla stessa riga (sulla riga dopo di solito è quello dell'azienda)
+function contactsNear(text) {
+  const found = { fieldMethods: {} };
+  const lineEnd = text.indexOf('\n') < 0 ? text.length : text.indexOf('\n');
+  const clean = deobfuscate(text);
+  for (const m of clean.matchAll(EMAIL_IN_TEXT)) {
+    const email = normalizeEmail(m[0]);
+    if (email && emailCategory(email) === 'personal') {
+      found.email = email;
+      found.fieldMethods.email = METHOD.nearName;
+      break;
+    }
+  }
+  for (const p of phonesInText(text)) {
+    const display = formatPhone(normalizePhone(p.number));
+    if (p.kind === 'whatsapp' && !found.whatsapp) {
+      found.whatsapp = display;
+      found.fieldMethods.whatsapp = METHOD.nearName;
+    } else if (p.kind === 'phone') {
+      const fields = phoneFields(display, METHOD.nearName);
+      if (fields.phone && p.index > lineEnd) continue;
+      for (const k of ['phone', 'mobile']) {
+        if (fields[k] && !found[k]) {
+          found[k] = fields[k];
+          found.fieldMethods[k] = METHOD.nearName;
+        }
+      }
+    }
+  }
+  if (!found.mobile) {
+    const m = BARE_MOBILE.exec(text);
+    BARE_MOBILE.lastIndex = 0;
+    const compact = m ? normalizePhone(m[1]) : '';
+    // un numero scritto come WhatsApp resta WhatsApp: non lo si chiama anche "cellulare"
+    if (compact.startsWith('+393') && formatPhone(compact) !== found.whatsapp) {
+      found.mobile = formatPhone(compact);
+      found.fieldMethods.mobile = METHOD.nearName;
+    }
+  }
+  return found;
 }
 
 // In un elenco "Nome – Ruolo / Nome – Ruolo" lo stesso ruolo può agganciarsi sia al nome prima
@@ -718,41 +832,62 @@ function peopleFromText(text, out) {
   const pairs = [];
   for (const m of text.matchAll(ROLE_THEN_NAME)) {
     const nameAt = m.index + m[0].length - m[2].length;
-    pairs.push({ rawName: m[2], rawRole: m[1], anchor: 'start', start: m.index, roleAt: m.index, nameAt });
+    pairs.push({ rawName: m[2], rawRole: m[1], anchor: 'start', start: m.index, end: m.index + m[0].length, roleAt: m.index, nameAt });
   }
   for (const m of text.matchAll(NAME_THEN_ROLE)) {
     const roleAt = m.index + m[0].length - m[2].length;
-    pairs.push({ rawName: m[1], rawRole: m[2], anchor: 'end', start: m.index, roleAt, nameAt: m.index });
+    pairs.push({ rawName: m[1], rawRole: m[2], anchor: 'end', start: m.index, end: m.index + m[0].length, roleAt, nameAt: m.index });
   }
   const usedRoles = new Set();
   const usedNames = new Set();
+  const accepted = [];
   for (const p of pairs.sort((a, b) => a.start - b.start)) {
     if (usedRoles.has(p.roleAt) || usedNames.has(p.nameAt)) continue;
-    const words = nameTokens(p.rawName, p.anchor);
+    const words = nameTokens(p.rawName, p.anchor, { allowSingle: true });
     if (!words) continue;
     usedRoles.add(p.roleAt);
     usedNames.add(p.nameAt);
-    out.push(person({ ...splitName(words), role: displayRole(p.rawRole), priority: rolePriority(p.rawRole), source: SOURCE.page, order: 1000 + p.start }));
+    accepted.push({ ...p, words });
   }
+  accepted.forEach((p, i) => {
+    // i recapiti fino alla persona successiva, al massimo tre righe
+    const limit = Math.min(accepted[i + 1]?.start ?? text.length, p.end + 220);
+    const near = contactsNear(text.slice(p.end, limit).split('\n').slice(0, 4).join('\n'));
+    out.push(person({
+      ...splitName(p.words),
+      ...near,
+      role: displayRole(p.rawRole),
+      priority: rolePriority(p.rawRole),
+      method: METHOD.page,
+      evidence: snippet(text, p.start, p.end - p.start, 30),
+      order: 1000 + p.start,
+    }));
+  });
 }
+
+const personKey = (p) => normKey(`${p.firstName} ${p.lastName}`);
 
 function mergePeople(list) {
   const byKey = new Map();
   for (const p of [...list].sort((a, b) => a.order - b.order)) {
-    const key = normKey(p.firstName + p.lastName);
+    const key = personKey(p);
     const current = byKey.get(key);
     if (!current) {
-      byKey.set(key, { ...p, sources: { ...p.sources } });
+      byKey.set(key, { ...p, fieldMethods: { ...p.fieldMethods } });
       continue;
     }
-    for (const f of ['email', 'phone', 'linkedin']) if (!current[f] && p[f]) current[f] = p[f];
+    for (const f of ['email', 'phone', 'mobile', 'whatsapp', 'linkedin']) {
+      if (!current[f] && p[f]) {
+        current[f] = p[f];
+        current.fieldMethods[f] = p.fieldMethods[f] || p.method;
+      }
+    }
     if (p.role && (!current.role || p.priority < current.priority)) {
       current.role = p.role;
       current.priority = p.priority;
     }
-    if (current.uncertain && !p.uncertain) {
-      current.uncertain = false;
-      current.source = p.source;
+    if (current.reliability !== 'high' && p.reliability === 'high') {
+      Object.assign(current, { reliability: 'high', method: p.method, evidence: p.evidence });
     }
   }
   return [...byKey.values()];
@@ -774,69 +909,28 @@ function profileMatchesPerson(url, p) {
   return last.length >= 3 && first.length >= 3 && slug.includes(last) && slug.includes(first);
 }
 
-function findPeople(ctx, emails, phones) {
+function findPeople(ctx, facts) {
   const found = [];
   peopleFromJsonLd(ctx.ld, found);
   peopleFromLinks(ctx.links, found);
   peopleFromText(ctx.text.page, found);
   const people = mergePeople(found);
 
-  const personalEmails = emails.filter(isPersonalEmail);
+  const personalEmails = unique(facts.filter((f) => f.kind === 'email' && emailCategory(f.value, f.extra) === 'personal').map((f) => f.value));
   const profiles = unique(ctx.links
     .filter((l) => l.kind === 'linkedin')
     .map((l) => normalizeLinkedin(str(l.href)))
     .filter((li) => li?.kind === 'profile')
     .map((li) => li.url));
-  const mobiles = phones.filter((p) => p.startsWith('+39 3'));
-
   for (const p of people) {
     if (!p.email) {
       const email = personalEmails.find((e) => emailMatchesPerson(e, p));
-      if (email) Object.assign(p, { email, sources: { ...p.sources, email: SOURCE.emailName } });
+      if (email) Object.assign(p, { email, fieldMethods: { ...p.fieldMethods, email: METHOD.emailName } });
     }
     if (!p.linkedin) {
       const url = profiles.find((u) => profileMatchesPerson(u, p));
-      if (url) Object.assign(p, { linkedin: url, sources: { ...p.sources, linkedin: SOURCE.linkedinName } });
+      if (url) Object.assign(p, { linkedin: url, fieldMethods: { ...p.fieldMethods, linkedin: METHOD.linkedinName } });
     }
   }
-  people.sort((a, b) => a.priority - b.priority || Number(a.uncertain) - Number(b.uncertain) || a.order - b.order);
-
-  const [main, ...others] = people;
-  const sourceOf = (p, f) => p.sources[f] || p.source;
-  const contact = main
-    ? {
-      firstName: field(main.firstName, main.source, main.uncertain),
-      lastName: field(main.lastName, main.source, main.uncertain),
-      role: field(main.role, main.source, main.uncertain),
-      email: field(main.email, sourceOf(main, 'email'), main.uncertain, personalEmails),
-      phone: field(main.phone, sourceOf(main, 'phone'), main.uncertain, mobiles),
-      linkedin: field(main.linkedin, sourceOf(main, 'linkedin'), main.uncertain, profiles),
-    }
-    : {
-      firstName: emptyField(),
-      lastName: emptyField(),
-      role: emptyField(),
-      email: field('', '', false, personalEmails),
-      phone: field('', '', false, mobiles),
-      linkedin: field('', '', false, profiles),
-    };
-  return {
-    contact,
-    people: others.slice(0, MAX_PEOPLE).map(({ priority, order, ...p }) => p),
-  };
-}
-
-// ---------------------------------------------------------------------------------------------
-// avvisi per il commerciale
-
-function buildNotes(snapshot, company, contact) {
-  const notes = [];
-  const errors = Number(snapshot.jsonldErrors) || 0;
-  if (errors === 1) notes.push('Un blocco di dati strutturati non era leggibile ed è stato ignorato.');
-  if (errors > 1) notes.push(`${errors} blocchi di dati strutturati non erano leggibili e sono stati ignorati.`);
-  if (snapshot.text?.truncated === true) notes.push('Pagina molto lunga: è stata letta solo la prima parte del testo.');
-  if (!company.email.value && !company.phone.value) notes.push('Nessuna email e nessun telefono in questa pagina: prova la pagina «Contatti».');
-  if (!contact.firstName.value) notes.push('Nessuna persona individuata: se ne conosci una, compila il Contatto a mano.');
-  else if (contact.firstName.uncertain) notes.push('Il contatto è ricavato dal testo della pagina: verifica nome e ruolo.');
-  return notes;
+  return people.map(({ order, ...p }) => p);
 }

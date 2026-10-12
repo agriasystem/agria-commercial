@@ -21,6 +21,17 @@ test('configurazione: valori predefiniti, scenari validi, modalità reale non at
   assert.equal(normalizeConfig({ hubspot: { mockDelayMs: -5 } }).hubspot.mockDelayMs, 700);
 });
 
+test('configurazione: proprietario HubSpot e limite della scansione', () => {
+  const ok = normalizeConfig({ hubspot: { ownerId: ' 123456 ', ownerName: '  Matteo   G. ' }, scan: { maxPages: 50 } });
+  assert.equal(ok.hubspot.ownerId, '123456');
+  assert.equal(ok.hubspot.ownerName, 'Matteo G.');
+  assert.equal(ok.scan.maxPages, 50);
+  assert.equal(normalizeConfig({ hubspot: { ownerId: 'abc' } }).hubspot.ownerId, '', "l'ID owner è numerico");
+  assert.equal(normalizeConfig({ scan: { maxPages: 1000 } }).scan.maxPages, 30);
+  assert.equal(normalizeConfig({ scan: { maxPages: 2 } }).scan.maxPages, 30);
+  assert.equal(normalizeConfig(undefined).scan.maxPages, 30);
+});
+
 test('configurazione: salvataggio e lettura', async () => {
   const storage = memoryStorage();
   assert.equal((await loadConfig(storage)).hubspot.mockScenario, 'not_found');

@@ -17,12 +17,37 @@
 <main class="wrap narrow">
   <h2 class="page-title">Impostazioni</h2>
   <form id="settings" class="stack" novalidate>
+    <section class="card" aria-labelledby="owner-title">
+      <h3 id="owner-title" class="eyebrow">Proprietario HubSpot</h3>
+      <p class="hint">Il commerciale che usa questo browser: diventa <code>hubspot_owner_id</code> di Azienda e Contatto. Non viene mai dedotto dal sito.</p>
+      <div class="fields">
+        <div class="field">
+          <label for="owner-name">Nome del commerciale</label>
+          <input id="owner-name" name="ownerName" type="text" autocomplete="name" maxlength="80">
+        </div>
+        <div class="field">
+          <label for="owner-id">ID owner HubSpot <code>hubspot_owner_id</code></label>
+          <input id="owner-id" name="ownerId" type="text" inputmode="numeric" maxlength="20" aria-describedby="owner-id-hint">
+          <div id="owner-id-hint" class="meta">Solo cifre. In HubSpot: Impostazioni → Utenti e team, oppure chiedilo all'amministratore.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="scan-title">
+      <h3 id="scan-title" class="eyebrow">Scansione approfondita</h3>
+      <div class="field">
+        <label for="max-pages">Numero massimo di pagine per sito</label>
+        <input id="max-pages" name="maxPages" type="number" min="5" max="100" step="1" aria-describedby="max-pages-hint">
+        <div id="max-pages-hint" class="meta">Da 5 a 100, consigliato 30. Le pagine si leggono una alla volta: Contatti, Chi siamo, Team e pagine legali per prime.</div>
+      </div>
+    </section>
+
     <section class="card" aria-labelledby="mode-title">
       <h3 id="mode-title" class="eyebrow">Connessione HubSpot</h3>
       <fieldset class="choices">
         <legend class="sr">Modalità HubSpot</legend>
         <label class="choice"><input type="radio" name="mode" value="mock" checked><span><strong>MOCK · simulazione</strong><small>«Verifica HubSpot» risponde con dati simulati. Nessun dato viene letto o scritto su HubSpot.</small></span></label>
-        <label class="choice off"><input type="radio" name="mode" value="real" disabled><span><strong>HubSpot reale</strong><small>Non disponibile in questa versione (V0).</small></span></label>
+        <label class="choice off"><input type="radio" name="mode" value="real" disabled><span><strong>HubSpot reale</strong><small>Non disponibile in questa versione.</small></span></label>
       </fieldset>
     </section>
 
@@ -35,13 +60,15 @@
         <label class="choice"><input type="radio" name="mockScenario" value="found"><span><strong>Azienda già presente</strong><small>Restituisce un'azienda simulata con lo stesso dominio.</small></span></label>
         <label class="choice"><input type="radio" name="mockScenario" value="error"><span><strong>Errore HubSpot</strong><small>Simula un errore di connessione, per provare i messaggi.</small></span></label>
       </fieldset>
-      <p id="saved" class="saved" role="status" aria-live="polite"></p>
     </section>
+
+    <p id="saved" class="saved" role="status" aria-live="polite"></p>
 
     <section class="card" aria-labelledby="privacy-title">
       <h3 id="privacy-title" class="eyebrow">Dati e privacy</h3>
       <ul class="plain">
-        <li>Agria Scout legge una pagina solo quando premi «Analizza pagina», e non la modifica.</li>
+        <li>Agria Scout legge le pagine solo quando premi «Scansione approfondita» o «Analizza solo questa pagina», e non le modifica.</li>
+        <li>La scansione scarica soltanto pagine pubbliche dello stesso sito, una alla volta, senza cookie e senza inviare dati.</li>
         <li>I dati trovati restano in questo browser: nessun server, nessun servizio a pagamento.</li>
         <li>In questa versione non c'è alcuna connessione a HubSpot e non serve nessuna credenziale.</li>
       </ul>
