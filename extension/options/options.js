@@ -1,13 +1,14 @@
-// Impostazioni di Agria Scout: proprietario HubSpot, limite della scansione, scenario MOCK.
-// Ogni scelta si salva da sola, in questo browser: i campi di testo mentre si scrive (dopo una
-// breve pausa) e all'uscita dal campo. Accanto al campo compare «✓ Salvato» per qualche secondo.
-// Il pannello aperto si aggiorna da solo.
+// Impostazioni di Agria Scout: commerciali disponibili (solo lettura), limite della scansione,
+// scenario MOCK. Ogni scelta si salva da sola, in questo browser: i campi di testo mentre si scrive
+// (dopo una breve pausa) e all'uscita dal campo. Accanto al campo compare «✓ Salvato» per qualche
+// secondo. Il pannello aperto si aggiorna da solo.
 
 import { applySetting, loadConfig, saveConfig } from '../lib/config.js';
+import { loadActiveOperator, onOperatorChange, OPERATORS } from '../lib/operators.js';
 
 const form = document.querySelector('#settings');
 const saved = document.querySelector('#saved');
-const FIELDS = ['mockScenario', 'ownerId', 'ownerName', 'maxPages'];
+const FIELDS = ['mockScenario', 'maxPages'];
 const TYPING_PAUSE_MS = 600;
 const FLAG_MS = 3000;
 // salvataggi in fila: un cambio fatto mentre il precedente è in corso non si perde
@@ -72,6 +73,28 @@ function onChange(event) {
   if (FIELDS.includes(name)) commit(name, event.target.value);
 }
 
+// i commerciali del registro (operators.js), con quello attivo in questa sessione di Chrome
+function renderOperators(active) {
+  const items = OPERATORS.map((o) => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'operator-name';
+    name.textContent = o.name;
+    const id = document.createElement('span');
+    id.className = 'operator-id';
+    id.textContent = `Owner ID ${o.hubspotOwnerId}`;
+    li.append(name, id);
+    if (o.hubspotOwnerId === active?.hubspotOwnerId) {
+      const chip = document.createElement('span');
+      chip.className = 'chip high';
+      chip.textContent = 'attivo ora';
+      li.append(chip);
+    }
+    return li;
+  });
+  document.querySelector('#operators').replaceChildren(...items);
+}
+
 // «← Torna ad Agria Scout»: il pannello laterale resta nella finestra; si salva ciò che manca e si
 // chiude questa scheda. sidePanel.open va chiamato subito, dentro il clic.
 function backToScout(tab) {
@@ -87,10 +110,11 @@ function backToScout(tab) {
 async function init() {
   const tab = await chrome.tabs.getCurrent().catch(() => null);
   document.querySelector('#back').addEventListener('click', () => backToScout(tab));
+  renderOperators(null);
+  onOperatorChange(renderOperators);
+  renderOperators(await loadActiveOperator().catch(() => null));
   const config = await loadConfig();
   form.elements.mockScenario.value = config.hubspot.mockScenario;
-  form.elements.ownerName.value = config.hubspot.ownerName;
-  form.elements.ownerId.value = config.hubspot.ownerId;
   form.elements.maxPages.value = String(config.scan.maxPages);
   form.addEventListener('input', onInput);
   form.addEventListener('change', onChange);

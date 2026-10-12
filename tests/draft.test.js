@@ -3,17 +3,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSnapshot } from '../extension/lib/parser.js';
 import {
-  applyFindings, contactReady, editField, emptyDraft, pickAlternative, recordFailure, refreshForms, resetQuickContext,
+  applyFindings, contactReady, editField, emptyDraft, pickAlternative, recordFailure, resetQuickContext,
   restoreDraft, setLegalBasisConfirmed, usePerson,
 } from '../extension/lib/draft.js';
 import { LEGAL_BASIS } from '../extension/lib/crmModel.js';
 
-const CONFIG = { hubspot: { ownerId: '987654', ownerName: 'Commerciale Agria' } };
 const page = (url, pageText, links = [], pageType = 'other') => analyzeSnapshot(
   { url, title: '', links, text: { header: '', footer: '', page: pageText } },
   { pageType },
 );
-const apply = (draft, findings) => applyFindings(draft, findings, CONFIG);
+const apply = (draft, findings) => applyFindings(draft, findings);
 
 const HOME = page('https://www.lamora.it/', 'Agriturismo La Mora\nVia Roma 1, 06081 Assisi (PG)\nTel. 075 8123456', [], 'home');
 const CONTATTI = page(
@@ -24,13 +23,13 @@ const CONTATTI = page(
 );
 const ALTRO_SITO = page('https://www.cantinarossi.it/', 'Mario Rossi – Titolare · mario.rossi@cantinarossi.it\nTel. 0742 123456', [], 'home');
 
-test('prima analisi: i campi HubSpot si riempiono, proprietario dalle Impostazioni', () => {
+test('prima analisi: i campi HubSpot si riempiono, il proprietario non sta nella bozza', () => {
   const { draft, mode } = apply(emptyDraft(), HOME);
   assert.equal(mode, 'new');
   assert.equal(draft.company.phone.value, '+39 0758123456');
   assert.equal(draft.company.domain.value, 'lamora.it');
-  assert.equal(draft.company.hubspot_owner_id.value, '987654');
-  assert.equal(draft.contact.hubspot_owner_id.value, '987654');
+  assert.equal(draft.company.hubspot_owner_id, undefined, 'viene dal commerciale attivo, mai dalla bozza');
+  assert.equal(draft.contact.hubspot_owner_id, undefined);
   assert.equal(draft.company.hs_lead_status.value, 'NEW');
   assert.equal(draft.contact.hs_legal_basis.value, LEGAL_BASIS);
   assert.equal(draft.legalBasisConfirmed, false, 'la base giuridica va confermata dal commerciale');
@@ -99,7 +98,7 @@ test("scelta di un altro valore e di un'altra persona (anche parziale)", () => {
   assert.ok(draft.company.phone.alternatives.includes('+39 0759999999'));
   assert.equal(draft.company.phone.edited, true);
 
-  draft = usePerson(draft, 'lucaverdi', CONFIG);
+  draft = usePerson(draft, 'lucaverdi');
   assert.equal(draft.mainPerson, 'lucaverdi');
   assert.equal(draft.mainPersonChosen, true);
   assert.equal(draft.contact.firstname.value, 'Luca');
@@ -144,14 +143,7 @@ test('base giuridica: suggerita, confermata solo dal commerciale e solo per un c
   let other = apply(apply(emptyDraft(), CONTATTI).draft, page('https://www.lamora.it/team', 'Giorgio Neri – Fondatore · giorgio.neri@lamora.it\nSara Blu – Chef · sara.blu@lamora.it', [], 'team')).draft;
   other = setLegalBasisConfirmed(other, true);
   assert.equal(other.legalBasisConfirmed, true);
-  assert.equal(usePerson(other, 'sarablu', CONFIG).legalBasisConfirmed, false);
-});
-
-test('proprietario: cambia con le Impostazioni, non viene dal sito', () => {
-  const { draft } = apply(emptyDraft(), HOME);
-  const other = refreshForms(draft, { hubspot: { ownerId: '111', ownerName: 'Altro' } });
-  assert.equal(other.company.hubspot_owner_id.value, '111');
-  assert.equal(refreshForms(draft, { hubspot: {} }).company.hubspot_owner_id.value, '');
+  assert.equal(usePerson(other, 'sarablu').legalBasisConfirmed, false);
 });
 
 test('bozza salvata: si ripristina; dati malformati o versioni vecchie si scartano', () => {

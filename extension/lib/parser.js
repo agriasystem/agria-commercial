@@ -685,6 +685,8 @@ const ROLES = [
   ['enologo', 4], ['enologa', 4], ['agronomo', 4], ['agronoma', 4], ['chef', 4], ['sommelier', 4], ['gestore', 4],
   ['gestrice', 4], ['referente', 4], ['manager', 4], ['receptionist', 4], ['reception', 4], ['front office', 4],
   ['concierge', 4],
+  // dalle informative privacy: vale solo se accanto c'è un nome vero ("Il titolare del trattamento è Mario Rossi")
+  ['titolare del trattamento', 4],
 ];
 const ROLE_PRIORITY = new Map(ROLES.map(([r, p]) => [normKey(r), p]));
 
@@ -729,7 +731,37 @@ const NOT_NAME = new Set([
   'responsabile', 'manager', 'general', 'managing', 'director', 'sales', 'export', 'owner', 'founder', 'ceo',
   'enologo', 'enologa', 'agronomo', 'agronoma', 'chef', 'gestore', 'gestrice', 'referente', 'vendite', 'host',
   'sommelier', 'revenue', 'event', 'concierge', 'receptionist', 'front', 'office', 'padrone', 'padrona',
+  // parole di collegamento dei titoli in maiuscolo ("DIFESA IN GIUDIZIO"), mai parte di un nome
+  'in', 'per', 'questa', 'questo', 'non', 'nel', 'nella', 'sul', 'sulla',
 ]);
+
+// Lessico delle informative privacy e delle note legali (senza accenti). Un "nome" che contiene una
+// di queste parole è il titolo di una sezione, non una persona: "MODALITÀ DI TRATTAMENTO" seguito da
+// "Il Titolare adotta…", "Dati personali – Titolare", "Base giuridica", "Diritti dell'interessato".
+const LEGAL_WORDS = new Set([
+  'modalita', 'trattamento', 'trattamenti', 'trattati', 'dati', 'dato', 'personali', 'personale', 'categorie',
+  'categoria', 'tipologie', 'tipologia', 'finalita', 'base', 'basi', 'giuridica', 'giuridiche', 'giuridico',
+  'interessato', 'interessata', 'interessati', 'diritto', 'diritti', 'periodo', 'conservazione', 'protezione',
+  'consenso', 'revoca', 'opposizione', 'reclamo', 'garante', 'autorita', 'gdpr', 'regolamento', 'normativa',
+  'decreto', 'legislativo', 'articolo', 'destinatari', 'comunicazione', 'diffusione', 'trasferimento',
+  'conferimento', 'profilazione', 'sicurezza', 'misure', 'responsabili', 'incaricati', 'autorizzati', 'luogo',
+  'tempi', 'durata', 'difesa', 'giudizio', 'modifiche', 'definizioni', 'riferimenti', 'legali', 'utente', 'utenti',
+  'navigazione', 'tracciamento', 'raccolti', 'informazioni', 'titolarita',
+  'data', 'personal', 'processing', 'controller', 'processor', 'protection', 'officer', 'purpose', 'purposes',
+  'legal', 'basis', 'rights', 'retention', 'subject', 'subjects', 'consent',
+]);
+// anche dopo un apostrofo: "DELL'INTERESSATO"
+const isLegalWord = (word) => word.split(/['’]/).some((part) => LEGAL_WORDS.has(normKey(part)));
+
+/**
+ * Validazione semantica di una persona: nome e cognome senza parole del lessico privacy/legale.
+ * Vale per ogni persona, anche già salvata o arrivata dai dati strutturati.
+ */
+export function isPersonName(firstName, lastName = '') {
+  const words = `${firstName || ''} ${lastName || ''}`.split(/\s+/).filter(Boolean);
+  return words.length > 0 && !words.some(isLegalWord);
+}
+
 const PARTICLES = new Set(['de', 'di', 'del', 'della', 'dei', 'degli', 'delle', 'da', 'dal', 'dalla', 'dalle', 'dello', 'lo', 'la', 'le', 'li', 'van', 'von', 'du', 'des']);
 
 // Parole del nome ripulite, oppure null se non sembra un nome di persona.
@@ -737,7 +769,7 @@ const PARTICLES = new Set(['de', 'di', 'del', 'della', 'dei', 'degli', 'delle', 
 // Una parola sola vale solo se è un nome di battesimo noto (persona parziale, senza cognome).
 function nameTokens(raw, anchor = '', { allowSingle = false } = {}) {
   let words = cleanText(raw, 80).split(' ').map((w) => w.replace(/[.,;:]+$/, '')).filter(Boolean);
-  const stop = (w) => NOT_NAME.has(normKey(w));
+  const stop = (w) => NOT_NAME.has(normKey(w)) || isLegalWord(w);
   if (anchor === 'start') {
     while (words.length && stop(words[0])) words.shift();
     const cut = words.findIndex(stop);
@@ -1002,5 +1034,6 @@ function findPeople(ctx, facts) {
       if (url) Object.assign(p, { linkedin: url, fieldMethods: { ...p.fieldMethods, linkedin: METHOD.linkedinName } });
     }
   }
-  return people.map(({ order, ...p }) => p);
+  // anche le persone dai dati strutturati e dai link passano la validazione semantica
+  return people.filter((p) => isPersonName(p.firstName, p.lastName)).map(({ order, ...p }) => p);
 }

@@ -1,5 +1,6 @@
-// Pannello laterale di Agria Scout: scansione del sito del prospect, form Azienda e Contatto con
-// le proprietà HubSpot, persone e dati rilevati, verifica HubSpot (MOCK).
+// Pannello laterale di Agria Scout: scelta del commerciale, scansione del sito del prospect, form
+// Azienda e Contatto con le proprietà HubSpot, persone e dati rilevati, verifica HubSpot (MOCK).
+// Senza un commerciale attivo nella sessione di Chrome il pannello mostra solo la sua scelta.
 
 import { analyzeSnapshot } from '../lib/parser.js';
 import { pageTypeOf } from '../lib/discovery.js';
@@ -13,6 +14,7 @@ import {
 } from '../lib/draft.js';
 import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normalizeUrl } from '../lib/validation.js';
 import { loadConfig, MOCK_SCENARIOS, normalizeConfig, onConfigChange } from '../lib/config.js';
+import { loadActiveOperator, onOperatorChange, OPERATORS, selectOperator } from '../lib/operators.js';
 import { createHubspotClient, HubspotError } from '../lib/hubspotClient.js';
 import { createMockHubspotClient } from '../lib/mockHubspotClient.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
@@ -39,6 +41,7 @@ const $ = (selector) => document.querySelector(selector);
 const valuesOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
 let draft = emptyDraft();
 let config = normalizeConfig(null);
+let operator = null; // commerciale attivo (operators.js): l'unica fonte di hubspot_owner_id
 let busy = ''; // '' | 'scan' | 'analyze'
 let scanController = null;
 let verifying = false;
@@ -105,10 +108,6 @@ function invalidMessage(prop, field) {
 function renderMeta(section, prop, { typing = false } = {}) {
   const field = draft[section][prop.name];
   const meta = $(`#${section}-${prop.name}-meta`);
-  if (prop.input === 'owner') {
-    meta.replaceChildren(field.value ? 'Dalle Impostazioni.' : el('span', { class: 'bad' }, 'Non impostato: indica il tuo ID owner nelle Impostazioni.'));
-    return;
-  }
   if (prop.input === 'fixed') {
     meta.replaceChildren('Valore per un nuovo prospect.');
     return;
@@ -124,12 +123,20 @@ function renderMeta(section, prop, { typing = false } = {}) {
   $(`#${section}-${prop.name}-field`).classList.toggle('warn', Boolean(invalid));
 }
 
+// proprietario HubSpot: non sta nella bozza, è sempre il commerciale attivo
+function renderOwner(section, prop) {
+  $(`#${section}-${prop.name}`).textContent = operator ? `${operator.name} · ID ${operator.hubspotOwnerId}` : '—';
+  $(`#${section}-${prop.name}-meta`).replaceChildren(operator ? 'Commerciale attivo in questa sessione.' : el('span', { class: 'bad' }, 'Nessun commerciale attivo.'));
+}
+
 function renderField(section, prop) {
+  if (prop.input === 'owner') {
+    renderOwner(section, prop);
+    return;
+  }
   const field = draft[section][prop.name];
   const control = $(`#${section}-${prop.name}`);
-  if (prop.input === 'owner') {
-    control.textContent = field.value ? `${config.hubspot.ownerName || 'Commerciale'} · ID ${field.value}` : '—';
-  } else if (prop.input === 'fixed') {
+  if (prop.input === 'fixed') {
     control.textContent = `${LEAD_STATUS.label} (${field.value || LEAD_STATUS.value})`;
   } else if (control.value !== field.value) {
     control.value = prop.input === 'select' && !prop.options.includes(field.value) ? '' : field.value;
@@ -139,7 +146,7 @@ function renderField(section, prop) {
   if (prop.visibleIf) $(`#${section}-${prop.name}-field`).hidden = !isPropVisible(prop, valuesOf(draft[section]));
   renderMeta(section, prop);
   const alts = $(`#${section}-${prop.name}-field .alts`);
-  const chips = ['owner', 'fixed', 'legalBasis', 'textarea', 'select'].includes(prop.input) ? [] : alternatives(field.alternatives, (value) => {
+  const chips = ['fixed', 'legalBasis', 'textarea', 'select'].includes(prop.input) ? [] : alternatives(field.alternatives, (value) => {
     draft = pickAlternative(draft, section, prop.name, value);
     afterEdit(section, prop.name);
   });
@@ -166,7 +173,7 @@ function renderForms() {
 
 function renderPeople() {
   const cards = peopleCards(draft.site, draft.mainPerson, (key) => {
-    draft = usePerson(draft, key, config);
+    draft = usePerson(draft, key);
     renderForms();
     renderPeople();
     scheduleSave();
@@ -255,7 +262,7 @@ function setBusy(mode) {
 }
 
 function addPage(findings) {
-  const { draft: next, mode } = applyFindings(draft, findings, config);
+  const { draft: next, mode } = applyFindings(draft, findings);
   draft = next;
   invalidateVerify();
   renderAll();
@@ -268,7 +275,7 @@ async function onDeepScan() {
     scanController?.abort();
     return;
   }
-  if (busy) return;
+  if (busy || needsOperator()) return;
   setBusy('scan');
   scanController = new AbortController();
   setStatus('busy', 'Lettura della pagina aperta…');
@@ -312,7 +319,7 @@ async function onDeepScan() {
 }
 
 async function onAnalyze() {
-  if (busy) return;
+  if (busy || needsOperator()) return;
   setBusy('analyze');
   setStatus('busy', 'Lettura della pagina in corso…');
   try {
@@ -350,7 +357,7 @@ function onClear() {
     return;
   }
   disarmClear();
-  draft = refreshForms(emptyDraft(), config);
+  draft = refreshForms(emptyDraft());
   invalidateVerify();
   renderAll();
   scheduleSave();
@@ -385,7 +392,7 @@ function invalidateVerify() {
 }
 
 async function onVerify() {
-  if (verifying) return;
+  if (verifying || needsOperator()) return;
   verifying = true;
   const button = $('#verify');
   button.disabled = true;
@@ -413,18 +420,59 @@ async function onVerify() {
   }
 }
 
-// il commerciale di questo browser (Impostazioni locali, mai sincronizzate)
 function renderConfig() {
   $('#mock-scenario').textContent = MOCK_SCENARIOS[config.hubspot.mockScenario];
-  const { ownerName, ownerId } = config.hubspot;
-  const who = ownerName || (ownerId ? `ID owner ${ownerId}` : '');
-  $('#active-user').replaceChildren('Commerciale attivo: ', who ? el('strong', {}, who) : el('span', { class: 'bad' }, 'non impostato (vedi Impostazioni)'));
+}
+
+// ---------------------------------------------------------------------------------------------
+// commerciale attivo: si sceglie all'apertura e vale per la sessione di Chrome (chrome.storage.session)
+
+function buildPicker() {
+  $('#operator-list').replaceChildren(...OPERATORS.map((o) => el('button', {
+    type: 'button', class: 'operator', 'data-owner-id': o.hubspotOwnerId, onclick: () => onPickOperator(o.hubspotOwnerId),
+  }, el('span', { class: 'operator-name' }, o.name), el('span', { class: 'operator-id' }, `Owner ID ${o.hubspotOwnerId}`))));
+  $('#change-operator').addEventListener('click', () => showPicker(true));
+  $('#operator-cancel').addEventListener('click', () => showPicker(false));
+}
+
+/** La scelta del commerciale al posto del pannello: obbligatoria finché non ce n'è uno attivo. */
+function showPicker(open) {
+  const picking = open || !operator;
+  $('#operator-picker').hidden = !picking;
+  $('#app').hidden = picking;
+  $('#operator-cancel').hidden = !operator;
+  $('#operator-error').textContent = '';
+  for (const b of document.querySelectorAll('#operator-list .operator')) b.setAttribute('aria-current', String(b.dataset.ownerId === operator?.hubspotOwnerId));
+}
+
+// Azienda e Contatto mostrano subito il nuovo proprietario: la bozza non lo contiene
+function applyOperator(next) {
+  operator = next;
+  $('#active-name').textContent = operator?.name || '';
+  for (const [section, props] of Object.entries(PROPS)) for (const prop of props) if (prop.input === 'owner') renderOwner(section, prop);
+  showPicker(false);
+}
+
+async function onPickOperator(id) {
+  try {
+    applyOperator(await selectOperator(id));
+  } catch (err) {
+    $('#operator-error').textContent = `Scelta non salvata: ${err?.message || err}`;
+  }
+}
+
+// senza commerciale attivo niente scansione, verifica HubSpot o operazioni CRM
+function needsOperator() {
+  if (operator) return false;
+  showPicker(true);
+  return true;
 }
 
 // ---------------------------------------------------------------------------------------------
 
 async function init() {
   buildForms();
+  buildPicker();
   $('#deep-scan').addEventListener('click', onDeepScan);
   $('#analyze').addEventListener('click', onAnalyze);
   $('#clear').addEventListener('click', onClear);
@@ -434,22 +482,25 @@ async function init() {
 
   onConfigChange((next) => {
     config = next;
-    draft = refreshForms(draft, config);
     renderConfig();
-    renderForms();
     invalidateVerify();
-    scheduleSave();
   });
+  onOperatorChange(applyOperator); // anche se lo sceglie un altro pannello di questa sessione
   try {
     config = await loadConfig();
   } catch (err) {
     console.warn('[Agria Scout] impostazioni non lette, uso quelle predefinite:', err);
   }
   renderConfig();
+  operator = await loadActiveOperator().catch((err) => {
+    console.warn('[Agria Scout] commerciale attivo non letto:', err);
+    return null;
+  });
 
   const saved = await chrome.storage.session.get('draft').catch(() => ({}));
-  draft = refreshForms(restoreDraft(saved.draft), config);
+  draft = refreshForms(restoreDraft(saved.draft));
   renderAll();
+  applyOperator(operator);
   if (draft.site.pages.length) setStatus('ok', "Dati ripresi dall'ultima analisi.", draft.site.notes);
   else setStatus('idle', IDLE_TEXT);
 }
@@ -457,4 +508,5 @@ async function init() {
 init().catch((err) => {
   console.error('[Agria Scout] avvio non riuscito:', err);
   setStatus('error', `Avvio non riuscito: ${err?.message || err}`);
+  $('#app').hidden = false; // l'errore resta visibile; scansione e verifica chiedono comunque il commerciale
 });

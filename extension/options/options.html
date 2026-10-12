@@ -17,22 +17,12 @@
 
 <main class="wrap narrow">
   <h2 class="page-title">Impostazioni</h2>
-  <p id="autosave" class="autosave">Impostazioni salvate automaticamente in questo browser. Valgono solo per questa installazione: ogni commerciale ha le sue, non si condividono con altri browser o utenti.</p>
+  <p id="autosave" class="autosave">Impostazioni salvate automaticamente in questo browser. Valgono solo per questa installazione: non si condividono con altri browser o utenti.</p>
   <form id="settings" class="stack" novalidate>
-    <section class="card" aria-labelledby="owner-title">
-      <h3 id="owner-title" class="eyebrow">Proprietario HubSpot</h3>
-      <p class="hint">Il commerciale che usa questo browser: diventa <code>hubspot_owner_id</code> di Azienda e Contatto. Non viene mai dedotto dal sito.</p>
-      <div class="fields">
-        <div class="field">
-          <label for="owner-name">Nome del commerciale <span class="saved-flag" data-saved-for="ownerName" role="status" hidden>✓ Salvato</span></label>
-          <input id="owner-name" name="ownerName" type="text" autocomplete="name" maxlength="80">
-        </div>
-        <div class="field">
-          <label for="owner-id">ID owner HubSpot <code>hubspot_owner_id</code> <span class="saved-flag" data-saved-for="ownerId" role="status" hidden>✓ Salvato</span></label>
-          <input id="owner-id" name="ownerId" type="text" inputmode="numeric" maxlength="20" aria-describedby="owner-id-hint">
-          <div id="owner-id-hint" class="meta">Solo cifre. In HubSpot: Impostazioni → Utenti e team, oppure chiedilo all'amministratore.</div>
-        </div>
-      </div>
+    <section class="card" aria-labelledby="operators-title">
+      <h3 id="operators-title" class="eyebrow">Commerciali disponibili</h3>
+      <p class="hint">Chi usa Agria Scout si sceglie all'apertura del pannello («Chi sta usando Agria Scout?») e resta attivo fino alla chiusura di Chrome. Il suo Owner ID diventa <code>hubspot_owner_id</code> di Azienda e Contatto: non viene mai dedotto dal sito.</p>
+      <ul id="operators" class="operators"></ul>
     </section>
 
     <section class="card" aria-labelledby="scan-title">
@@ -71,7 +61,7 @@
       <ul class="plain">
         <li>Agria Scout legge le pagine solo quando premi «Scansione approfondita» o «Analizza solo questa pagina», e non le modifica.</li>
         <li>La scansione scarica soltanto pagine pubbliche dello stesso sito, una alla volta, senza cookie e senza inviare dati.</li>
-        <li>I dati trovati e queste impostazioni restano in questo browser: nessun server, nessun servizio a pagamento, nessuna sincronizzazione.</li>
+        <li>I dati trovati e queste impostazioni restano in questo browser: nessun server, nessun servizio a pagamento, nessuna sincronizzazione. Il commerciale attivo vale solo per la sessione di Chrome in corso.</li>
         <li>In questa versione non c'è alcuna connessione a HubSpot e non serve nessuna credenziale.</li>
       </ul>
     </section>

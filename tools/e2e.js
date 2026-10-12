@@ -4,9 +4,11 @@
 // (*.test) e ripercorre il lavoro del commerciale: analisi della pagina aperta, correzione a mano,
 // scansione approfondita di tutto il sito (con sitemap, pagine rotte, file non HTML, link verso
 // un altro dominio, blog lungo), persone e dati rilevati, Verifica HubSpot nei tre scenari MOCK,
-// annullamento, nuovo prospect, ripresa dopo la riapertura del pannello, Svuota, e i due casi
-// emersi dai test manuali (La Mora: email attaccata al telefono e host senza cognome; Perticaia:
-// alias info@/visit@, cantina, contatto a mano). Impostazioni con salvataggio automatico.
+// annullamento, nuovo prospect, ripresa dopo la riapertura del pannello, Svuota, e i casi emersi
+// dai test manuali (La Mora: email attaccata al telefono e host senza cognome; Perticaia: alias
+// info@/visit@, cantina, contatto a mano, informativa privacy senza persone false). Scelta del
+// commerciale all'apertura, cambio durante la sessione e nuova sessione di Chrome. Impostazioni con
+// salvataggio automatico e commerciali disponibili.
 // Controlla anche che le pagine analizzate non vengano modificate e che la scansione non esca dal
 // dominio né scarichi due volte la stessa pagina. Schermate in .tmp/e2e/.
 //
@@ -22,6 +24,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OPERATORS } from '../extension/lib/operators.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXT = path.join(ROOT, 'extension');
@@ -45,8 +48,10 @@ const SITES = {
   'cantinarossi.test': { '/contatti': 'cantina-contatti.html' },
   // casi emersi dai test manuali sui siti reali (Milestone 1.1.1), riprodotti con dati di prova
   'lamora-caso.test': { '/': 'caso-lamora-home.html', '/chi-siamo': 'caso-lamora-chi-siamo.html' },
-  'perticaia-caso.test': { '/': 'caso-perticaia.html' },
+  'perticaia-caso.test': { '/': 'caso-perticaia.html', '/privacy-policy': 'caso-perticaia-privacy.html' },
 };
+const [MATTEO, ALESSANDRO] = OPERATORS;
+const ownerText = (o) => `${o.name} · ID ${o.hubspotOwnerId}`;
 
 let chromium;
 try {
@@ -130,7 +135,7 @@ async function run(context, site) {
   watch(panel, 'pannello');
   await panel.setViewportSize({ width: 400, height: 900 });
   await panel.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
-  await panel.waitForSelector('#company-name');
+  await panel.waitForSelector('#company-name', { state: 'attached' });
   await panel.waitForFunction(() => document.querySelector('#status-text').textContent !== 'Caricamento…');
 
   const value = (id) => panel.inputValue(`#${id}`);
@@ -189,9 +194,34 @@ async function run(context, site) {
   check('badge MOCK visibile in alto', await panel.isVisible('header .badge.mock'));
   equal('scenario MOCK iniziale', await text('#mock-scenario'), 'Azienda non presente');
   check('pulsante principale «Scansione approfondita»', (await text('#deep-scan')).trim() === 'Scansione approfondita');
-  equal('commerciale attivo non ancora impostato', await text('#active-user'), 'Commerciale attivo: non impostato (vedi Impostazioni)');
 
-  console.log('\nImpostazioni: proprietario HubSpot, limite pagine, salvataggio automatico');
+  console.log('\nScelta del commerciale: «Chi sta usando Agria Scout?»');
+  check('nuova sessione: schermata di scelta', await panel.isVisible('#operator-picker'));
+  equal('domanda', (await text('#picker-title')).trim(), 'Chi sta usando Agria Scout?');
+  check('pannello nascosto finché non si sceglie', await panel.isHidden('#app'));
+  equal('una card per ogni commerciale del registro', JSON.stringify(await panel.$$eval('#operator-list .operator .operator-name', (n) => n.map((x) => x.textContent))),
+    JSON.stringify(OPERATORS.map((o) => o.name)));
+  equal('ID owner in piccolo', await panel.$eval(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"] .operator-id`, (n) => n.textContent), `Owner ID ${MATTEO.hubspotOwnerId}`);
+  check('nessun «Annulla» alla prima scelta', await panel.isHidden('#operator-cancel'));
+  // senza commerciale: scansione, analisi e verifica non partono nemmeno forzando il clic
+  for (const button of ['#deep-scan', '#analyze', '#verify']) await press(button);
+  await new Promise((r) => setTimeout(r, 300));
+  check('senza commerciale: nessuna scansione', !requests.some((q) => q.scan));
+  equal('senza commerciale: stato invariato', await panel.getAttribute('#status', 'data-state'), 'idle');
+  check('senza commerciale: nessuna verifica HubSpot', await panel.isHidden('#verify-result'));
+  check('senza commerciale: resta la scelta', await panel.isVisible('#operator-picker'));
+  await shot('0-chi-sta-usando');
+  await panel.click(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"]`);
+  check('scelto Matteo: pannello visibile', await panel.isVisible('#app'));
+  check('scelta chiusa', await panel.isHidden('#operator-picker'));
+  equal('commerciale attivo nel pannello', (await text('#active-user')).replace(/\s+/g, ' ').trim(), 'Commerciale attivo: Matteo Garuzzo · Cambia');
+  equal('proprietario Azienda = commerciale attivo', await text('#company-hubspot_owner_id'), ownerText(MATTEO));
+  equal('proprietario Contatto = commerciale attivo', await text('#contact-hubspot_owner_id'), ownerText(MATTEO));
+  includes('proprietario: fonte dichiarata', await text('#company-hubspot_owner_id-meta'), 'Commerciale attivo');
+  equal('scelta salvata solo per la sessione', await panel.evaluate(() => chrome.storage.session.get('activeOperator').then((r) => r.activeOperator)), MATTEO.hubspotOwnerId);
+  check('nulla nelle impostazioni permanenti', !JSON.stringify(await panel.evaluate(() => chrome.storage.local.get(null))).includes(MATTEO.hubspotOwnerId));
+
+  console.log('\nImpostazioni: commerciali disponibili, limite pagine, salvataggio automatico');
   const options = await context.newPage();
   watch(options, 'impostazioni');
   await options.goto(`chrome-extension://${extId}/options/options.html`);
@@ -199,25 +229,27 @@ async function run(context, site) {
   equal('limite pagine predefinito', await options.inputValue('#max-pages'), '30');
   includes('salvataggio automatico dichiarato', await options.textContent('#autosave'), 'Impostazioni salvate automaticamente');
   equal('pulsante per tornare al pannello', (await options.textContent('#back')).trim(), '← Torna ad Agria Scout');
+  includes('sezione «Commerciali disponibili»', await options.textContent('#operators-title'), 'Commerciali disponibili');
+  await options.waitForFunction(() => document.querySelector('#operators .chip'));
+  const operatorRows = await options.$$eval('#operators li', (li) => li.map((x) => x.textContent));
+  equal('commerciali disponibili: nome e Owner ID', JSON.stringify(operatorRows.map((r) => r.replace('attivo ora', ''))),
+    JSON.stringify(OPERATORS.map((o) => `${o.name}Owner ID ${o.hubspotOwnerId}`)));
+  check('commerciale attivo segnato', operatorRows[0].endsWith('attivo ora') && !operatorRows[1].includes('attivo ora'), JSON.stringify(operatorRows));
+  check('nome e Owner ID non più modificabili a mano', !(await options.$('#owner-name')) && !(await options.$('#owner-id')) && !(await options.$('input[name="ownerId"]')));
   const flagShown = (name) => options.waitForFunction((n) => !document.querySelector(`[data-saved-for="${n}"]`).hidden, name, { timeout: 5000 }).then(() => true, () => false);
   const flagGone = (name) => options.waitForFunction((n) => document.querySelector(`[data-saved-for="${n}"]`).hidden, name, { timeout: 8000 }).then(() => true, () => false);
-  await options.fill('#owner-id', 'abc');
-  await options.waitForFunction(() => document.querySelector('#saved').textContent.includes('solo cifre'), null, { timeout: 5000 }).catch(() => {});
-  includes('ID owner non numerico rifiutato', await options.textContent('#saved'), 'solo cifre');
-  check('valore sbagliato: nessun «✓ Salvato»', await options.$eval('[data-saved-for="ownerId"]', (f) => f.hidden));
+  await options.fill('#max-pages', '500');
+  await options.waitForFunction(() => document.querySelector('#saved').textContent.includes('da 5 a 100'), null, { timeout: 5000 }).catch(() => {});
+  includes('limite fuori intervallo rifiutato', await options.textContent('#saved'), 'Scegli un numero da 5 a 100');
+  check('valore sbagliato: nessun «✓ Salvato»', await options.$eval('[data-saved-for="maxPages"]', (f) => f.hidden));
   // si scrive e basta, senza uscire dal campo: il salvataggio parte da solo
-  await options.fill('#owner-name', 'Commerciale Agria');
-  check('nome del commerciale: «✓ Salvato» mentre si scrive', await flagShown('ownerName'));
-  equal('testo della conferma', (await options.textContent('[data-saved-for="ownerName"]')).trim(), '✓ Salvato');
-  await options.fill('#owner-id', '123456789');
-  check('ID owner: «✓ Salvato»', await flagShown('ownerId'));
+  await options.fill('#max-pages', '35');
+  check('limite pagine: «✓ Salvato» mentre si scrive', await flagShown('maxPages'));
+  equal('testo della conferma', (await options.textContent('[data-saved-for="maxPages"]')).trim(), '✓ Salvato');
   equal('errore precedente tolto', (await options.textContent('#saved')).trim(), '');
   await options.screenshot({ path: path.join(OUT, '6-impostazioni.png'), fullPage: true });
-  check('«✓ Salvato» sparisce dopo qualche secondo', await flagGone('ownerName'));
-  await panel.waitForFunction(() => document.querySelector('#company-hubspot_owner_id').textContent.includes('123456789'));
-  includes('proprietario Azienda dalle Impostazioni', await text('#company-hubspot_owner_id'), 'Commerciale Agria · ID 123456789');
-  includes('proprietario Contatto dalle Impostazioni', await text('#contact-hubspot_owner_id'), '123456789');
-  equal('commerciale attivo nel pannello', await text('#active-user'), 'Commerciale attivo: Commerciale Agria');
+  check('«✓ Salvato» sparisce dopo qualche secondo', await flagGone('maxPages'));
+  equal('limite salvato', await panel.evaluate(() => chrome.storage.local.get('config').then((r) => r.config.scan.maxPages)), 35);
 
   console.log('\nPagina che non è un sito web');
   let r = await analyze(panel);
@@ -373,6 +405,26 @@ async function run(context, site) {
   check('di nuovo valido: base giuridica visibile', await panel.isVisible('#contact-hs_legal_basis-field'));
   check('cambio di persona: base giuridica da confermare di nuovo', !(await panel.isChecked('#legal-basis-confirm')));
 
+  console.log('\nCambio commerciale durante la sessione');
+  await panel.click('#change-operator');
+  check('«Cambia» riapre la scelta', await panel.isVisible('#operator-picker'));
+  check('«Annulla» disponibile', await panel.isVisible('#operator-cancel'));
+  equal('commerciale attuale segnato', await panel.getAttribute(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"]`, 'aria-current'), 'true');
+  await panel.click('#operator-cancel');
+  check('«Annulla»: si torna al pannello', await panel.isVisible('#app'));
+  equal('«Annulla»: commerciale invariato', await text('#active-name'), MATTEO.name);
+  await panel.click('#change-operator');
+  await panel.click(`#operator-list .operator[data-owner-id="${ALESSANDRO.hubspotOwnerId}"]`);
+  equal('nuovo commerciale attivo', (await text('#active-user')).replace(/\s+/g, ' ').trim(), 'Commerciale attivo: Alessandro Poponi · Cambia');
+  equal('owner Azienda aggiornato subito', await text('#company-hubspot_owner_id'), ownerText(ALESSANDRO));
+  equal('owner Contatto aggiornato subito', await text('#contact-hubspot_owner_id'), ownerText(ALESSANDRO));
+  equal('prospect invariato: nome', await value('company-name'), 'Agriturismo La Mora');
+  equal('prospect invariato: correzione a mano', await value('company-city'), 'Santa Maria degli Angeli');
+  equal('prospect invariato: contatto', `${await value('contact-firstname')} ${await value('contact-lastname')}`, 'Maria Bianchi');
+  await options.waitForFunction((name) => document.querySelector('#operators li .chip')?.parentElement.textContent.startsWith(name), ALESSANDRO.name, { timeout: 5000 }).catch(() => {});
+  includes('Impostazioni: commerciale attivo aggiornato', await options.$eval('#operators li:has(.chip)', (li) => li.textContent), ALESSANDRO.name);
+  check('l\'owner non è nella bozza salvata', !JSON.stringify(await panel.evaluate(() => chrome.storage.session.get('draft'))).includes('hubspot_owner_id'));
+
   console.log('\nVerifica HubSpot (MOCK)');
   let v = await verify();
   check('pulsante disattivato durante la verifica (niente doppio invio)', v.disabled);
@@ -434,6 +486,9 @@ async function run(context, site) {
   console.log('\nRiapertura del pannello');
   await panel.reload();
   await panel.waitForFunction(() => document.querySelector('#status').dataset.state === 'ok');
+  check('commerciale ancora attivo: nessuna nuova scelta', await panel.isVisible('#app') && await panel.isHidden('#operator-picker'));
+  equal('commerciale ripreso', await text('#active-name'), ALESSANDRO.name);
+  equal('owner ripreso', await text('#company-hubspot_owner_id'), ownerText(ALESSANDRO));
   equal('dati ripresi', await value('company-name'), 'Cantina Rossi');
   equal('contatto ripreso', await value('contact-lastname'), 'Rossi');
   includes('riepilogo ripreso', await text('#summary'), 'pagina');
@@ -445,7 +500,7 @@ async function run(context, site) {
   await press('#clear');
   equal('secondo clic: svuotato', await value('company-name'), '');
   equal('stato iniziale', await panel.getAttribute('#status', 'data-state'), 'idle');
-  includes('proprietario resta dalle Impostazioni', await text('#company-hubspot_owner_id'), '123456789');
+  equal('proprietario resta il commerciale attivo', await text('#company-hubspot_owner_id'), ownerText(ALESSANDRO));
 
   console.log('\nCaso reale La Mora: email attaccata al telefono, host senza cognome');
   const lamora = await openTab(site('lamora-caso.test', '/'));
@@ -468,10 +523,13 @@ async function run(context, site) {
   includes('fornitore solo tra i dati legali', await panel.$eval('#all-data > .group.legal', (d) => d.textContent), 'Studio Web Esempio S.r.l.');
   await shot('3-caso-la-mora');
 
-  console.log('\nCaso reale Perticaia: alias funzionali, cantina, contatto inserito a mano');
+  console.log('\nCaso reale Perticaia: alias funzionali, cantina, informativa privacy, contatto inserito a mano');
   const perticaia = await openTab(site('perticaia-caso.test', '/'));
+  const beforePerticaia = requests.length;
   r = await deepScan(perticaia);
   equal('scansione completata', r.state, 'ok');
+  check('informativa privacy analizzata', requests.slice(beforePerticaia).some((q) => q.scan && q.path === '/privacy-policy'));
+  equal('riepilogo: nessuna persona', await text('#summary'), '2 pagine · 2 email · 2 telefoni · 1 WhatsApp · 0 persone');
   equal('email principale', await value('company-email_aziendale_principale'), 'info@perticaia.it');
   equal('email secondaria', await value('company-email_aziendale_secondaria'), 'visit@perticaia.it');
   equal('telefono principale', await value('company-phone'), '+39 0742379014');
@@ -484,6 +542,9 @@ async function run(context, site) {
     'WHATSAPP', '+39 376 255 3216', '', 'P.IVA', '12345678903', '',
     'ALTRI CANALI', '- Instagram: https://www.instagram.com/perticaia/', '- Facebook: https://www.facebook.com/perticaia',
   ].join('\n'));
+  const everything = await panel.evaluate(() => document.body.textContent + [...document.querySelectorAll('input, textarea')].map((i) => i.value).join(' '));
+  check('«Modalità Di Trattamento — Titolare» non compare da nessuna parte', !/Modalit[àa] di trattamento/i.test(everything));
+  equal('nessun Contatto dall\'informativa', await value('contact-firstname'), '');
   // settore cambiato a mano: il tipo di struttura compare solo per l'Hospitality
   await panel.selectOption('#company-settore_agria', 'Hospitality');
   check('settore Hospitality: tipo struttura di nuovo visibile', await panel.isVisible('#company-tipo_struttura_hospitality-field'));
@@ -513,13 +574,32 @@ async function run(context, site) {
   check('nessun errore JavaScript', errors.length === 0, errors.join(' | '));
 }
 
+// Chrome chiuso e riaperto con lo stesso profilo: il commerciale attivo (chrome.storage.session) va
+// scelto di nuovo, le impostazioni (chrome.storage.local) restano.
+async function newSession(context) {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
+  const extId = new URL(worker.url()).host;
+  const errors = [];
+  const panel = await context.newPage();
+  panel.on('pageerror', (e) => errors.push(e.message));
+  await panel.goto(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
+  await panel.waitForFunction(() => document.querySelector('#status-text').textContent !== 'Caricamento…');
+  check('nuova sessione: «Chi sta usando Agria Scout?» di nuovo', await panel.isVisible('#operator-picker') && await panel.isHidden('#app'));
+  equal('nuova sessione: nessun commerciale attivo', await panel.evaluate(() => chrome.storage.session.get('activeOperator').then((r) => r.activeOperator ?? null)), null);
+  equal('nuova sessione: le impostazioni restano', await panel.evaluate(() => chrome.storage.local.get('config').then((r) => r.config.scan.maxPages)), 35);
+  await panel.click(`#operator-list .operator[data-owner-id="${MATTEO.hubspotOwnerId}"]`);
+  equal('nuova sessione: owner del commerciale scelto', await panel.textContent('#company-hubspot_owner_id'), ownerText(MATTEO));
+  check('nuova sessione: nessun errore JavaScript', errors.length === 0, errors.join(' | '));
+}
+
 async function main() {
   fs.rmSync(PROFILE, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
   const server = await startServer();
   const { port } = server.address();
   const site = (host, p) => `http://${host}:${port}${p}`;
-  const context = await chromium.launchPersistentContext(PROFILE, {
+  const launch = () => chromium.launchPersistentContext(PROFILE, {
     channel: 'chromium',
     headless: true,
     args: [
@@ -529,8 +609,13 @@ async function main() {
       '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable',
     ],
   });
+  let context = await launch();
   try {
     await run(context, site);
+    await context.close();
+    console.log('\nNuova sessione di Chrome (stesso profilo)');
+    context = await launch();
+    await newSession(context);
   } catch (err) {
     failures.push(`interrotto: ${err.message}`);
     console.error(err);

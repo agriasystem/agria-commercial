@@ -9,7 +9,6 @@ import {
   proposeStructure, SETTORE_OPTIONS, TIPO_STRUTTURA_OPTIONS,
 } from '../extension/lib/crmModel.js';
 
-const CONFIG = { hubspot: { ownerId: '42', ownerName: 'Commerciale' } };
 const ORIGIN = 'https://www.lamora.it';
 const page = (path, pageType, { title = '', text = '', footer = '', links = [], jsonld = [], resources = [], headings = [], meta = {} } = {}) => analyzeSnapshot(
   { url: `${ORIGIN}${path}`, title, meta, jsonld, links, resources, headings, text: { header: '', footer, page: [text, footer].filter(Boolean).join('\n') } },
@@ -68,7 +67,7 @@ test('stessi valori su più pagine: una voce sola, con tutte le fonti', () => {
 
 test('più email: principale e secondaria proposte, personali e PEC fuori, nessuna persa', () => {
   const site = siteOf(HOME, CHI_SIAMO, CONTATTI, PRIVACY);
-  const company = proposeCompany(site, CONFIG);
+  const company = proposeCompany(site);
   assert.equal(company.email_aziendale_principale.value, 'info@lamora.it');
   assert.equal(company.email_aziendale_secondaria.value, 'prenotazioni@lamora.it');
   const all = factsOf(site, 'email').map((f) => f.value);
@@ -78,7 +77,7 @@ test('più email: principale e secondaria proposte, personali e PEC fuori, nessu
     assert.ok(shown.includes(email), `${email} resta selezionabile`);
   }
   // scelta a mano della principale: la secondaria non la ripete
-  const fixed = proposeCompany(site, CONFIG, { fixed: { email_aziendale_principale: 'prenotazioni@lamora.it' } });
+  const fixed = proposeCompany(site, { fixed: { email_aziendale_principale: 'prenotazioni@lamora.it' } });
   assert.equal(fixed.email_aziendale_secondaria.value, 'info@lamora.it');
 });
 
@@ -98,14 +97,14 @@ test('più persone, persona parziale, regola del Contatto HubSpot', () => {
   assert.ok(byName['Maria Bianchi'].sources[0].evidence.includes('Maria Bianchi'), 'evidenza testuale conservata');
   assert.equal(people[0].firstName, 'Maria', 'prima le persone utilizzabili');
 
-  const { fields, mainKey } = proposeContact(site, CONFIG);
+  const { fields, mainKey } = proposeContact(site);
   assert.equal(mainKey, 'mariabianchi');
   assert.deepEqual(values(fields), {
     firstname: 'Maria', lastname: 'Bianchi', jobtitle: 'Titolare', email: 'maria.bianchi@lamora.it',
-    phone: '', mobilephone: '', hs_linkedin_url: '', hubspot_owner_id: '42', hs_legal_basis: LEGAL_BASIS,
+    phone: '', mobilephone: '', hs_linkedin_url: '', hs_legal_basis: LEGAL_BASIS,
   });
   // scelta a mano di una persona parziale: il WhatsApp non diventa il cellulare, resta proposto
-  const paolo = proposeContact(site, CONFIG, 'paolo').fields;
+  const paolo = proposeContact(site, 'paolo').fields;
   assert.equal(paolo.firstname.value, 'Paolo');
   assert.equal(paolo.lastname.value, '');
   assert.equal(paolo.mobilephone.value, '');
@@ -139,7 +138,7 @@ test('dati societari dalle pagine legali', () => {
   assert.equal(pec.extra.pec, true);
   const seat = factsOf(site, 'address').find((a) => a.extra.legalSeat);
   assert.equal(seat.value, 'Via Roma 1, 06123 Perugia (PG)');
-  const company = proposeCompany(site, CONFIG);
+  const company = proposeCompany(site);
   assert.equal(company.city.value, 'Assisi', 'la città è quella della struttura, non della sede legale');
   assert.equal(company.country.value, 'Italia');
 });
@@ -157,7 +156,7 @@ test('modello HubSpot: proprietà, opzioni esatte, social, settore e tipo, owner
   assert.deepEqual(TIPO_STRUTTURA_OPTIONS, ['Agriturismo', 'Boutique Hotel', 'Relais', 'Masseria', 'Resort indipendente', 'Hotel', 'Struttura con ristorante', 'Struttura con spa', 'Altro']);
   assert.equal(LEGAL_BASIS, 'Legitimate interest – prospect/lead');
 
-  const c = values(proposeCompany(siteOf(HOME, CHI_SIAMO, CONTATTI, PRIVACY), CONFIG));
+  const c = values(proposeCompany(siteOf(HOME, CHI_SIAMO, CONTATTI, PRIVACY)));
   assert.equal(c.name, 'Agriturismo La Mora');
   assert.equal(c.domain, 'lamora.it');
   assert.equal(c.website, ORIGIN);
@@ -168,7 +167,7 @@ test('modello HubSpot: proprietà, opzioni esatte, social, settore e tipo, owner
   assert.equal(c.state, 'Umbria');
   assert.equal(c.country, 'Italia');
   assert.equal(c.linkedin_company_page, 'https://www.linkedin.com/company/agriturismo-la-mora');
-  assert.equal(c.hubspot_owner_id, '42', 'dalle Impostazioni, mai dal sito');
+  assert.equal('hubspot_owner_id' in c, false, 'il proprietario non si propone dal sito: è il commerciale attivo');
   assert.equal(c.hs_lead_status, 'NEW');
   const site = siteOf(HOME);
   assert.deepEqual(factsOf(site, 'social').map((f) => f.extra.network).sort(), ['Facebook', 'Instagram', 'LinkedIn'], 'il pulsante "condividi" non è un profilo');
@@ -184,7 +183,7 @@ test('settore e tipo di struttura: proposti dalle parole del sito, mai inventati
   assert.equal(proposeStructure({ hotel: 3, 'boutique hotel': 6 }, ['Villa Fiorita']).value, 'Boutique Hotel');
   assert.equal(proposeStructure({ spa: 9, ristorante: 4 }, ['Villa Fiorita']).value, 'Struttura con spa');
   assert.equal(proposeStructure({}, ['Villa Fiorita']).value, '');
-  const cantina = proposeCompany(siteOf(page('/', 'home', { title: 'Cantina Rossi', text: 'Cantina e vini. I nostri vini nascono nei vigneti. Degustazione in cantina, vendemmia.' })), CONFIG);
+  const cantina = proposeCompany(siteOf(page('/', 'home', { title: 'Cantina Rossi', text: 'Cantina e vini. I nostri vini nascono nei vigneti. Degustazione in cantina, vendemmia.' })));
   assert.equal(cantina.settore_agria.value, 'Cantina / Vitivinicolo');
   assert.equal(cantina.settore_agria.reliability, 'check');
   assert.equal(cantina.tipo_struttura_hospitality.value, '', 'il tipo di struttura vale solo per Hospitality');
@@ -192,8 +191,8 @@ test('settore e tipo di struttura: proposti dalle parole del sito, mai inventati
 
 test('contesto rapido: informazioni operative senza campo dedicato, nell\'ordine concordato, senza dati societari', () => {
   const site = siteOf(HOME, CHI_SIAMO, CONTATTI, PRIVACY);
-  const company = values(proposeCompany(site, CONFIG));
-  const contact = values(proposeContact(site, CONFIG).fields);
+  const company = values(proposeCompany(site));
+  const contact = values(proposeContact(site).fields);
   const text = buildQuickContext(site, company, contact);
   assert.equal(text, [
     'WHATSAPP',

@@ -21,12 +21,12 @@ test('configurazione: valori predefiniti, scenari validi, modalità reale non at
   assert.equal(normalizeConfig({ hubspot: { mockDelayMs: -5 } }).hubspot.mockDelayMs, 700);
 });
 
-test('configurazione: proprietario HubSpot e limite della scansione', () => {
+test('configurazione: limite della scansione; il proprietario HubSpot non è più un\'impostazione', () => {
   const ok = normalizeConfig({ hubspot: { ownerId: ' 123456 ', ownerName: '  Matteo   G. ' }, scan: { maxPages: 50 } });
-  assert.equal(ok.hubspot.ownerId, '123456');
-  assert.equal(ok.hubspot.ownerName, 'Matteo G.');
   assert.equal(ok.scan.maxPages, 50);
-  assert.equal(normalizeConfig({ hubspot: { ownerId: 'abc' } }).hubspot.ownerId, '', "l'ID owner è numerico");
+  // nome e ID owner scritti a mano nelle versioni precedenti si scartano: ora c'è il registro dei commerciali
+  assert.equal('ownerId' in ok.hubspot, false);
+  assert.equal('ownerName' in ok.hubspot, false);
   assert.equal(normalizeConfig({ scan: { maxPages: 1000 } }).scan.maxPages, 30);
   assert.equal(normalizeConfig({ scan: { maxPages: 2 } }).scan.maxPages, 30);
   assert.equal(normalizeConfig(undefined).scan.maxPages, 30);
@@ -40,24 +40,22 @@ test('impostazioni: salvataggio automatico di ogni campo, valori sbagliati non s
     if (!error) await saveConfig(config, storage);
     return error;
   };
-  assert.equal(await autosave('ownerName', '  Matteo Garuzzo '), '');
-  assert.equal(await autosave('ownerId', '123456789'), '');
   assert.equal(await autosave('maxPages', '40'), '');
   assert.equal(await autosave('mockScenario', 'found'), '');
-  assert.deepEqual((await loadConfig(storage)).hubspot, { ...DEFAULT_CONFIG.hubspot, ownerName: 'Matteo Garuzzo', ownerId: '123456789', mockScenario: 'found' });
+  assert.deepEqual((await loadConfig(storage)).hubspot, { ...DEFAULT_CONFIG.hubspot, mockScenario: 'found' });
   assert.equal((await loadConfig(storage)).scan.maxPages, 40);
   // un valore sbagliato spiega il motivo e lascia il valore salvato prima
-  assert.match(await autosave('ownerId', '12ab'), /solo cifre/);
   assert.match(await autosave('maxPages', '500'), /da 5 a 100/);
+  assert.match(await autosave('maxPages', 'abc'), /da 5 a 100/);
   assert.ok(await autosave('mockScenario', 'real'));
   assert.ok(await autosave('token', 'segreto'), 'nessun campo estraneo');
+  // nome e ID owner non si impostano più a mano: vengono dal commerciale scelto all'apertura
+  assert.match(await autosave('ownerName', 'Matteo Garuzzo'), /sconosciuta/);
+  assert.match(await autosave('ownerId', '123456789'), /sconosciuta/);
   const after = await loadConfig(storage);
-  assert.equal(after.hubspot.ownerId, '123456789');
   assert.equal(after.scan.maxPages, 40);
   assert.equal(after.hubspot.mockScenario, 'found');
-  // svuotare nome e ID è permesso (nuovo commerciale sullo stesso browser)
-  assert.equal(await autosave('ownerId', ''), '');
-  assert.equal((await loadConfig(storage)).hubspot.ownerId, '');
+  assert.equal('ownerId' in storage.data.config.hubspot, false);
 });
 
 test('configurazione: salvataggio e lettura', async () => {

@@ -4,7 +4,7 @@
 // Funzioni pure: restituiscono sempre un oggetto nuovo.
 
 import { normKey } from './validation.js';
-import { METHOD } from './parser.js';
+import { isPersonName, METHOD } from './parser.js';
 
 const MAX_SOURCES = 10;
 const MAX_FAILURES = 50;
@@ -40,7 +40,7 @@ function mergeFact(facts, fact, page) {
 
 function mergePerson(people, p, page) {
   const key = personKey(p);
-  if (!key) return;
+  if (!key || !isPersonName(p.firstName, p.lastName)) return;
   const current = people[key] || (people[key] = {
     key, firstName: p.firstName, lastName: p.lastName, role: '', priority: 9,
     email: '', phone: '', mobile: '', whatsapp: '', linkedin: '', fields: {}, sources: [],
@@ -169,9 +169,14 @@ export function missingForContact(p) {
   return missing;
 }
 
-/** Persone rilevate: prima i contatti utilizzabili, poi per ruolo e affidabilità. */
+/**
+ * Persone rilevate: prima i contatti utilizzabili, poi per ruolo e affidabilità. Un candidato che non
+ * supera la validazione (es. un titolo dell'informativa privacy in una bozza salvata prima) non compare
+ * da nessuna parte: né qui, né nel Contesto rapido, né nel Contatto.
+ */
 export function peopleOf(site) {
   return Object.values(site.people)
+    .filter((p) => isPersonName(p.firstName, p.lastName))
     .map((p) => ({
       ...p,
       reliability: p.sources.some((s) => s.reliability === 'high') || distinct(p.sources, (s) => s.url) >= 2 ? 'high' : 'check',
@@ -193,6 +198,6 @@ export function summaryOf(site) {
     n(factsOf(site, 'email').length, 'email', 'email'),
     n(factsOf(site, 'phone').length, 'telefono', 'telefoni'),
     n(factsOf(site, 'whatsapp').length, 'WhatsApp', 'WhatsApp'),
-    n(Object.keys(site.people).length, 'persona', 'persone'),
+    n(peopleOf(site).length, 'persona', 'persone'),
   ].join(' · ');
 }

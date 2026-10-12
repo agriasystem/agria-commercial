@@ -5,8 +5,6 @@ import { analyzeSnapshot } from '../extension/lib/parser.js';
 import { addPageFindings, emptySite, factsOf, peopleOf } from '../extension/lib/siteData.js';
 import { proposeCompany, proposeContact } from '../extension/lib/crmModel.js';
 
-const CONFIG = { hubspot: { ownerId: '', ownerName: '' } };
-
 // fotografia della pagina come la produce content/collector.js
 const snap = (over = {}) => ({
   schema: 2,
@@ -27,8 +25,8 @@ const snap = (over = {}) => ({
 function analyze(over, pageType = 'home') {
   const findings = analyzeSnapshot(snap(over), { pageType });
   const site = addPageFindings(emptySite(), findings);
-  const company = proposeCompany(site, CONFIG);
-  const contact = proposeContact(site, CONFIG).fields;
+  const company = proposeCompany(site);
+  const contact = proposeContact(site).fields;
   const v = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
   return { findings, site, company, contact, c: v(company), p: v(contact), people: peopleOf(site), facts: (kind) => factsOf(site, kind) };
 }

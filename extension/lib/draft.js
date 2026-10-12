@@ -6,11 +6,15 @@
 // ricalcolano dai dati di TUTTE le pagine analizzate; un sito diverso è un nuovo prospect.
 // La base giuridica si conferma solo per un Contatto valido, e va confermata di nuovo se il
 // contatto cambia persona o smette di essere valido.
+// Il proprietario HubSpot non sta nella bozza: è sempre il commerciale attivo (vedi crmRecords),
+// così cambiando commerciale Azienda e Contatto passano subito al nuovo owner.
 
 import {
-  buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, isContactReady, proposeCompany, proposeContact, proposeStructureFor,
+  buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, isContactReady, isPropVisible, proposeCompany, proposeContact,
+  proposeStructureFor,
 } from './crmModel.js';
-import { addFailure, addPageFindings, emptySite } from './siteData.js';
+import { requireOperator } from './operators.js';
+import { addFailure, addPageFindings, emptySite, peopleOf } from './siteData.js';
 
 export const DRAFT_VERSION = 2;
 const MAX_ALTERNATIVES = 12;
@@ -19,7 +23,9 @@ const EMAIL_PROPS = ['email_aziendale_principale', 'email_aziendale_secondaria']
 const unique = (list) => [...new Set(list.filter(Boolean))];
 const str = (x) => (typeof x === 'string' ? x : '');
 const blankField = () => ({ value: '', reliability: '', method: '', url: '', evidence: '', alternatives: [], edited: false });
-const blankFields = (props) => Object.fromEntries(props.map((p) => [p.name, blankField()]));
+// campi conservati nella bozza: tutti tranne hubspot_owner_id
+const draftProps = (props) => props.filter((p) => p.input !== 'owner');
+const blankFields = (props) => Object.fromEntries(draftProps(props).map((p) => [p.name, blankField()]));
 const valuesOf = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
 
 export function emptyDraft() {
@@ -59,28 +65,28 @@ function syncLegalBasis(draft) {
   if (!contactReady(draft)) draft.legalBasisConfirmed = false;
 }
 
-/** Ricalcola le proposte dai dati del sito (e dalle Impostazioni per il proprietario). */
-export function refreshForms(draft, config) {
+/** Ricalcola le proposte dai dati del sito. */
+export function refreshForms(draft) {
   const next = structuredClone(draft);
   const fixed = {};
   for (const prop of EMAIL_PROPS) if (next.company[prop].edited && next.company[prop].value) fixed[prop] = next.company[prop].value;
   if (next.company.settore_agria.edited) fixed.settore_agria = next.company.settore_agria.value;
-  const company = proposeCompany(next.site, config, { fixed });
-  for (const { name } of COMPANY_PROPS) if (name !== 'hs_quick_context') mergeField(next.company[name], company[name]);
-  const { fields, mainKey } = proposeContact(next.site, config, next.mainPersonChosen ? next.mainPerson : null);
+  const company = proposeCompany(next.site, { fixed });
+  for (const { name } of draftProps(COMPANY_PROPS)) if (name !== 'hs_quick_context') mergeField(next.company[name], company[name]);
+  const { fields, mainKey } = proposeContact(next.site, next.mainPersonChosen ? next.mainPerson : null);
   next.mainPerson = mainKey;
-  for (const { name } of CONTACT_PROPS) mergeField(next.contact[name], fields[name]);
+  for (const { name } of draftProps(CONTACT_PROPS)) mergeField(next.contact[name], fields[name]);
   updateQuickContext(next);
   syncLegalBasis(next);
   return next;
 }
 
 /** Risultati di una pagina → { draft, mode: 'new' | 'merged' }. Un altro dominio azzera tutto. */
-export function applyFindings(draft, findings, config) {
+export function applyFindings(draft, findings) {
   const otherSite = Boolean(draft.site.domain) && draft.site.domain !== findings.page.domain;
   const base = otherSite ? emptyDraft() : structuredClone(draft);
   base.site = addPageFindings(base.site, findings);
-  return { draft: refreshForms(base, config), mode: draft.site.domain && !otherSite ? 'merged' : 'new' };
+  return { draft: refreshForms(base), mode: draft.site.domain && !otherSite ? 'merged' : 'new' };
 }
 
 /** Pagina non raggiungibile durante la scansione: resta nell'elenco, la scansione continua. */
@@ -112,15 +118,15 @@ export function pickAlternative(draft, section, name, value) {
 }
 
 /** Usa una delle persone rilevate come Contatto principale (anche parziale: lo decide il commerciale). */
-export function usePerson(draft, key, config) {
-  if (!draft.site.people[key]) return draft;
+export function usePerson(draft, key) {
+  if (!peopleOf(draft.site).some((p) => p.key === key)) return draft;
   const next = structuredClone(draft);
   // la conferma della base giuridica valeva per la persona di prima
   if (next.mainPerson !== key) next.legalBasisConfirmed = false;
   next.mainPerson = key;
   next.mainPersonChosen = true;
   for (const field of Object.values(next.contact)) field.edited = false;
-  return refreshForms(next, config);
+  return refreshForms(next);
 }
 
 /** Conferma della base giuridica: possibile solo per un Contatto valido. */
@@ -145,7 +151,7 @@ export function restoreDraft(raw) {
     if (!site || typeof site.domain !== 'string' || typeof site.facts !== 'object' || typeof site.people !== 'object' || !Array.isArray(site.pages)) return draft;
     draft.site = { ...emptySite(), ...structuredClone(site) };
     for (const [section, props] of [['company', COMPANY_PROPS], ['contact', CONTACT_PROPS]]) {
-      for (const { name } of props) {
+      for (const { name } of draftProps(props)) {
         const f = raw[section]?.[name];
         if (!f || typeof f.value !== 'string') continue;
         draft[section][name] = {
@@ -166,4 +172,24 @@ export function restoreDraft(raw) {
   } catch {
     return emptyDraft();
   }
+}
+
+/**
+ * Azienda e Contatto come proprietà HubSpot, pronti per la scrittura (fase successiva): i valori dei
+ * form, solo i campi visibili (niente tipo di struttura fuori dall'Hospitality), la base giuridica
+ * solo se confermata e hubspot_owner_id preso SOLO dal commerciale attivo. Senza commerciale attivo
+ * non si prepara nulla.
+ */
+export function crmRecords(draft, operator) {
+  const { hubspotOwnerId } = requireOperator(operator);
+  const valueFor = (p, values) => {
+    if (p.input === 'owner') return hubspotOwnerId;
+    if (p.input === 'legalBasis') return draft.legalBasisConfirmed ? values[p.name] : '';
+    return values[p.name];
+  };
+  const record = (section, props) => {
+    const values = valuesOf(draft[section]);
+    return Object.fromEntries(props.filter((p) => isPropVisible(p, values)).map((p) => [p.name, valueFor(p, values)]));
+  };
+  return { company: record('company', COMPANY_PROPS), contact: record('contact', CONTACT_PROPS) };
 }

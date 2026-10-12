@@ -16,7 +16,17 @@
 </header>
 
 <main class="wrap">
-  <p id="active-user" class="who"></p>
+  <!-- all'apertura, finché non c'è un commerciale attivo in questa sessione di Chrome -->
+  <section id="operator-picker" class="card picker" aria-labelledby="picker-title" hidden>
+    <h2 id="picker-title" class="picker-title">Chi sta usando Agria Scout?</h2>
+    <p class="hint">Scegli il tuo nome: sarai il proprietario HubSpot di Azienda e Contatto. Vale fino alla chiusura di Chrome.</p>
+    <div id="operator-list" class="operator-list"></div>
+    <p id="operator-error" class="picker-error" role="alert"></p>
+    <button id="operator-cancel" class="btn ghost wide" type="button" hidden>Annulla</button>
+  </section>
+
+  <div id="app" class="stack" hidden>
+  <p id="active-user" class="who">Commerciale attivo: <strong id="active-name"></strong> · <button id="change-operator" class="linkbtn" type="button">Cambia</button></p>
   <section id="status" class="card status" data-state="idle" aria-labelledby="status-title">
     <h2 id="status-title" class="eyebrow"><span class="dot" aria-hidden="true"></span>Stato analisi</h2>
     <div aria-live="polite">
@@ -72,6 +82,7 @@
     <button id="verify" class="btn wide" type="button">Verifica HubSpot</button>
     <div id="verify-result" class="result" role="status" hidden></div>
   </section>
+  </div>
 
   <p class="foot">Agria Scout <span id="version"></span> · I dati restano in questo browser</p>
 </main>

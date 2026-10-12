@@ -20,7 +20,8 @@ export const LEAD_STATUS = Object.freeze({ value: 'NEW', label: 'Da contattare' 
 export const LEGAL_BASIS = 'Legitimate interest – prospect/lead';
 
 // proprietà nell'ordine del form HubSpot; label = testo mostrato al commerciale;
-// visibleIf = il campo si mostra solo quando gli altri campi hanno questi valori
+// visibleIf = il campo si mostra solo quando gli altri campi hanno questi valori;
+// input 'owner' = hubspot_owner_id: viene solo dal commerciale attivo, non si propone né si salva nella bozza
 export const COMPANY_PROPS = [
   { name: 'name', label: 'Nome azienda' },
   { name: 'domain', label: 'Dominio', check: 'domain' },
@@ -190,8 +191,9 @@ export function addressesOf(site) {
 /**
  * fixed: valori già scelti a mano (email, per non proporre due volte la stessa; settore, per il tipo
  * di struttura). La ragione sociale resta tra i dati rilevati: non è proposta per HubSpot.
+ * Nessuna proposta per hubspot_owner_id: è il commerciale attivo (vedi draft.crmRecords).
  */
-export function proposeCompany(site, config, { fixed = {} } = {}) {
+export function proposeCompany(site, { fixed = {} } = {}) {
   const names = factsOf(site, 'name');
   const phones = factsOf(site, 'phone');
   const people = peopleOf(site);
@@ -229,7 +231,6 @@ export function proposeCompany(site, config, { fixed = {} } = {}) {
     state: region ? { ...region, alternatives: [] } : emptyProposal(),
     country: country ? { ...country, alternatives: [] } : emptyProposal(),
     linkedin_company_page: fromFact(linkedin[0], linkedin.slice(1).map((f) => f.value)),
-    hubspot_owner_id: fixedValue(config?.hubspot?.ownerId || '', 'Impostazioni'),
     hs_lead_status: fixedValue(LEAD_STATUS.value, 'nuovo prospect'),
     hs_quick_context: emptyProposal(),
   };
@@ -250,7 +251,7 @@ function personField(person, field, value) {
  * la regola (nome + cognome + email, telefono o LinkedIn). Le persone parziali non diventano
  * Contatto in automatico. → { fields, mainKey }
  */
-export function proposeContact(site, config, chosenKey = null) {
+export function proposeContact(site, chosenKey = null) {
   const people = peopleOf(site);
   const main = chosenKey ? people.find((p) => p.key === chosenKey) : people.find((p) => p.eligible);
   const personal = factsOf(site, 'email').filter((f) => emailCategory(f.value, f.extra) === 'personal').map((f) => f.value);
@@ -269,7 +270,6 @@ export function proposeContact(site, config, chosenKey = null) {
     phone: field(main && personField(main, 'phone', main.phone), landlines),
     mobilephone: field(main && personField(main, 'mobile', main.mobile), [main?.whatsapp, ...mobiles]),
     hs_linkedin_url: field(main && personField(main, 'linkedin', main.linkedin), profiles),
-    hubspot_owner_id: fixedValue(config?.hubspot?.ownerId || '', 'Impostazioni'),
     hs_legal_basis: fixedValue(LEGAL_BASIS, 'valore suggerito per i prospect'),
   };
   return { fields, mainKey: main?.key || null };

@@ -1,16 +1,15 @@
-// Milestone 1.1.1: qualità dei dati sui casi emersi dai test manuali (Agriturismo La Mora,
-// Cantina Perticaia). Le pagine sono fotografie equivalenti alle fixture HTML usate nella prova nel
-// browser (tests/fixtures/caso-*.html): nessun sito reale, nessuna rete.
+// Milestone 1.1.1 e 1.1.2: qualità dei dati sui casi emersi dai test manuali (Agriturismo La Mora,
+// Cantina Perticaia e la sua informativa privacy). Le pagine sono fotografie equivalenti alle fixture
+// HTML usate nella prova nel browser (tests/fixtures/caso-*.html): nessun sito reale, nessuna rete.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSnapshot, emailCategory } from '../extension/lib/parser.js';
-import { addPageFindings, emptySite, factsOf, peopleOf } from '../extension/lib/siteData.js';
+import { addPageFindings, emptySite, factsOf, peopleOf, summaryOf } from '../extension/lib/siteData.js';
 import {
   buildQuickContext, COMPANY_PROPS, isPropVisible, proposeCompany, proposeContact,
 } from '../extension/lib/crmModel.js';
-import { applyFindings, editField, emptyDraft } from '../extension/lib/draft.js';
+import { applyFindings, editField, emptyDraft, restoreDraft, usePerson } from '../extension/lib/draft.js';
 
-const CONFIG = { hubspot: { ownerId: '42', ownerName: 'Commerciale' } };
 const snap = (url, { title = '', page = '', footer = '', links = [], headings = [], meta = {} } = {}) => ({
   url, title, meta, jsonld: [], links, resources: [], microdata: [], addresses: [], headings,
   text: { header: '', footer, page: [page, footer].filter(Boolean).join('\n') },
@@ -20,8 +19,8 @@ const siteOf = (...pages) => pages.reduce((site, p) => addPageFindings(site, p),
 const values = (fields) => Object.fromEntries(Object.entries(fields).map(([k, f]) => [k, f.value]));
 const emails = (site) => factsOf(site, 'email').map((f) => f.value);
 function quickContextOf(site) {
-  const company = values(proposeCompany(site, CONFIG));
-  const contact = values(proposeContact(site, CONFIG).fields);
+  const company = values(proposeCompany(site));
+  const contact = values(proposeContact(site).fields);
   return { company, contact, text: buildQuickContext(site, company, contact) };
 }
 
@@ -120,7 +119,7 @@ test('alias funzionali: email aziendali generiche, mai prova di una persona', ()
   assert.equal(people['Mario Rossi'].email, '', 'visit@ non è l\'email di Mario');
   assert.equal(people['Giulia Bianchi'].email, 'giulia.bianchi@cantina-esempio.test');
   assert.ok(!people['Luca Neri'], 'nessuna persona da un link a info@');
-  const company = values(proposeCompany(site, CONFIG));
+  const company = values(proposeCompany(site));
   assert.equal(company.email_aziendale_principale, 'info@cantina-esempio.test');
   assert.equal(company.email_aziendale_secondaria, 'visit@cantina-esempio.test');
 });
@@ -151,7 +150,7 @@ test('persone parziali: Paolo — Host senza cognome inventato, mai Contatto in 
   assert.match(paolo.sources[0].evidence, /Paolo, host di Agriturismo La Mora/, "con l'evidenza");
   assert.equal(paolo.mobile, '', 'il numero del footer è dell\'azienda, non di Paolo');
   assert.equal(paolo.email, '');
-  const { fields, mainKey } = proposeContact(site, CONFIG);
+  const { fields, mainKey } = proposeContact(site);
   assert.equal(mainKey, null, 'nessun Contatto automatico senza cognome');
   assert.equal(fields.firstname.value, '');
 });
@@ -179,7 +178,7 @@ test('contesto rapido caso La Mora: WhatsApp, P.IVA, Paolo; niente email corrott
   assert.ok(!text.includes('Studio Web Esempio'), 'nessuna ragione sociale di fornitori');
   // la ragione sociale del fornitore resta solo tra i dati rilevati, mai proposta come nome
   assert.ok(factsOf(site, 'legalName').some((f) => f.value === 'Studio Web Esempio S.r.l.'));
-  assert.ok(!proposeCompany(site, CONFIG).name.alternatives.some((a) => a.includes('Studio Web')));
+  assert.ok(!proposeCompany(site).name.alternatives.some((a) => a.includes('Studio Web')));
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -251,7 +250,7 @@ test('tipo struttura Hospitality: visibile solo con settore Hospitality, ripropo
   assert.equal(isPropVisible(COMPANY_PROPS.find((p) => p.name === 'city'), {}), true, 'gli altri campi restano sempre visibili');
 
   // La Mora: Hospitality → Cantina (tipo vuoto e nascosto) → di nuovo Hospitality (tipo riproposto)
-  let { draft } = applyFindings(emptyDraft(), LAMORA_HOME, CONFIG);
+  let { draft } = applyFindings(emptyDraft(), LAMORA_HOME);
   assert.equal(draft.company.tipo_struttura_hospitality.value, 'Agriturismo');
   draft = editField(draft, 'company', 'settore_agria', 'Cantina / Vitivinicolo');
   assert.equal(draft.company.tipo_struttura_hospitality.value, '');
@@ -262,6 +261,132 @@ test('tipo struttura Hospitality: visibile solo con settore Hospitality, ripropo
   draft = editField(draft, 'company', 'settore_agria', 'Altro');
   assert.equal(draft.company.tipo_struttura_hospitality.value, 'Relais');
   // e una nuova pagina non lo ricalcola contro il settore scelto a mano
-  draft = applyFindings(draft, LAMORA_CHI_SIAMO, CONFIG).draft;
+  draft = applyFindings(draft, LAMORA_CHI_SIAMO).draft;
   assert.equal(draft.company.settore_agria.value, 'Altro');
+});
+
+// ---------------------------------------------------------------------------------------------
+// caso Perticaia, informativa privacy: "MODALITÀ DI TRATTAMENTO" + "Il Titolare adotta…" non è una persona
+
+const PERTICAIA_PRIVACY = analyze(snap(`${PERTICAIA}/privacy-policy`, {
+  title: 'Privacy Policy | Perticaia',
+  page: [
+    'PRIVACY POLICY',
+    'Privacy Policy di: perticaia-caso.test',
+    'Questo sito raccoglie alcuni Dati Personali dei propri Utenti.',
+    'Titolare del Trattamento dei Dati',
+    'Perticaia Società Agricola S.r.l.',
+    'Località Casale 1, 06036 Montefalco (PG)',
+    'Indirizzo e-mail del titolare: info@perticaia.it',
+    'CATEGORIE DI DATI',
+    'Il Titolare raccoglie, in modo autonomo o tramite terze parti, Cookie e Dati di Utilizzo.',
+    'Modalità e luogo del trattamento dei Dati raccolti',
+    'MODALITÀ DI TRATTAMENTO',
+    "Il Titolare adotta le opportune misure di sicurezza volte ad impedire l'accesso, la divulgazione, la modifica o la distruzione non autorizzate dei Dati Personali.",
+    'BASE GIURIDICA DEL TRATTAMENTO',
+    "Il Titolare tratta Dati Personali relativi all'Utente in caso sussista una delle condizioni previste dalla legge.",
+    'LUOGO',
+    'I Dati sono trattati presso le sedi operative del Titolare.',
+    'PERIODO DI CONSERVAZIONE',
+    'I Dati sono trattati e conservati per il tempo richiesto dalle finalità per le quali sono stati raccolti.',
+    'Finalità del Trattamento dei Dati raccolti',
+    "I Dati dell'Utente sono raccolti per consentire al Titolare di fornire i propri Servizi.",
+    "DIRITTI DELL'INTERESSATO",
+    'Il Titolare risponde alle richieste degli Utenti senza ritardo.',
+    'RESPONSABILE DELLA PROTEZIONE DEI DATI',
+    'Il Titolare non ha nominato un responsabile della protezione dei dati.',
+    'DIFESA IN GIUDIZIO',
+    "I Dati Personali dell'Utente possono essere utilizzati da parte del Titolare in giudizio.",
+  ].join('\n'),
+  footer: 'Perticaia Società Agricola S.r.l. · P.IVA 12345678903',
+}), 'legal');
+const peopleIn = (text) => peopleOf(siteOf(analyze(snap(`${PERTICAIA}/privacy-policy`, { page: text }), 'legal')));
+const LEGAL_EXPRESSIONS = [
+  'Modalità di trattamento', 'Titolare del trattamento', 'Responsabile del trattamento', 'Dati personali', 'Categorie di dati',
+  'Finalità del trattamento', 'Base giuridica', 'Interessato', "Diritti dell'interessato", 'Periodo di conservazione',
+  'Responsabile della protezione dei dati',
+];
+
+test('"Modalità di trattamento — Titolare" non è una persona, in nessuna forma', () => {
+  for (const text of [
+    'Modalità di trattamento — Titolare',
+    'MODALITÀ DI TRATTAMENTO — Titolare',
+    'Modalità Di Trattamento — Titolare',
+    'MODALITÀ DI TRATTAMENTO\nIl Titolare adotta le opportune misure di sicurezza.',
+  ]) assert.deepEqual(peopleIn(text), [], text);
+  // l'informativa del caso reale: nessuna persona dai titoli delle sezioni
+  assert.deepEqual(peopleOf(siteOf(PERTICAIA_PRIVACY)), []);
+});
+
+test("lessico privacy/legale: le espressioni dell'informativa non sono mai nomi di persona", () => {
+  for (const expression of LEGAL_EXPRESSIONS) {
+    const title = expression.replace(/(^|\s)(\p{Ll})/gu, (m, sp, c) => sp + c.toUpperCase()); // "Base Giuridica"
+    for (const text of [
+      `${expression} — Titolare`,
+      `${title} — Titolare`,
+      `${expression.toUpperCase()} — Titolare`,
+      `${expression.toUpperCase()}\nIl Titolare adotta le misure previste.`,
+      `Titolare: ${title}`,
+      `${title}\nResponsabile`,
+    ]) assert.deepEqual(peopleIn(text).map((p) => `${p.firstName} ${p.lastName}`), [], text);
+  }
+});
+
+test('"Titolare del trattamento" da solo non è una persona', () => {
+  for (const text of [
+    'Titolare del trattamento',
+    'TITOLARE DEL TRATTAMENTO',
+    'Titolare del Trattamento dei Dati\nPerticaia Società Agricola S.r.l.',
+    'Titolare del trattamento è La Mora Società Agricola S.r.l., con sede legale in Via Roma 1',
+    'Il titolare del trattamento è Agriturismo La Mora.',
+  ]) assert.deepEqual(peopleIn(text), [], text);
+});
+
+test('"Il titolare del trattamento è Mario Rossi": una persona vera dell\'informativa resta', () => {
+  for (const text of [
+    'Il titolare del trattamento è Mario Rossi',
+    'Il titolare del trattamento è Mario Rossi, con sede in Località Casale 1, Montefalco.',
+    'Titolare del trattamento: Mario Rossi',
+  ]) {
+    const people = peopleIn(text);
+    assert.equal(people.length, 1, text);
+    assert.deepEqual([people[0].firstName, people[0].lastName, people[0].role], ['Mario', 'Rossi', 'Titolare del trattamento'], text);
+    assert.equal(people[0].eligible, false, 'senza recapiti non diventa Contatto');
+  }
+  // solo se supera la normale validazione: niente aziende né parole dell'informativa al posto del nome
+  assert.deepEqual(peopleIn('Il titolare del trattamento è Dati Personali S.r.l.'), []);
+  // la stessa persona su "Chi siamo" con un ruolo commerciale: resta quel ruolo
+  const about = analyze(snap(`${PERTICAIA}/chi-siamo`, { page: 'Mario Rossi – Titolare' }), 'about');
+  const privacy = analyze(snap(`${PERTICAIA}/privacy-policy`, { page: 'Il titolare del trattamento è Mario Rossi' }), 'legal');
+  const [mario] = peopleOf(siteOf(privacy, about));
+  assert.equal(mario.role, 'Titolare');
+  assert.equal(mario.sources.length, 2);
+});
+
+test('candidato scartato: assente da Persone rilevate, Contesto rapido e Contatto (caso Perticaia)', () => {
+  const site = siteOf(PERTICAIA_HOME, PERTICAIA_PRIVACY);
+  assert.deepEqual(peopleOf(site), []);
+  const { contact, text } = quickContextOf(site);
+  assert.ok(!text.includes('POTENZIALI CONTATTI'), text);
+  assert.ok(!/Modalit|Trattamento|Titolare/i.test(text), text);
+  assert.equal(text, quickContextOf(siteOf(PERTICAIA_HOME)).text, "l'informativa non aggiunge nulla al contesto rapido");
+  assert.equal(contact.firstname, '');
+  assert.equal(contact.jobtitle, '');
+
+  // bozza salvata da Agria Scout 0.2.1 con la persona falsa già dentro: sparisce ovunque
+  const { draft } = applyFindings(emptyDraft(), PERTICAIA_HOME);
+  const old = structuredClone(draft);
+  old.site.people.modalitaditrattamento = {
+    key: 'modalitaditrattamento', firstName: 'Modalità', lastName: 'Di Trattamento', role: 'Titolare', priority: 1,
+    email: '', phone: '', mobile: '', whatsapp: '', linkedin: '', fields: {},
+    sources: [{ url: `${PERTICAIA}/privacy-policy`, pageType: 'legal', method: 'testo della pagina', reliability: 'check', evidence: 'MODALITÀ DI TRATTAMENTO\nIl Titolare' }],
+  };
+  old.mainPerson = 'modalitaditrattamento';
+  old.mainPersonChosen = true;
+  const back = restoreDraft(JSON.parse(JSON.stringify(old)));
+  assert.deepEqual(peopleOf(back.site), []);
+  assert.match(summaryOf(back.site), /0 persone$/);
+  assert.ok(!buildQuickContext(back.site).includes('Modalità'));
+  assert.equal(proposeContact(back.site, 'modalitaditrattamento').fields.firstname.value, '');
+  assert.equal(usePerson(back, 'modalitaditrattamento'), back, 'non si può scegliere come Contatto');
 });

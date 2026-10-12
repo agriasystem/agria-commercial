@@ -14,7 +14,7 @@ nessuno scraping di Google Maps.
 
 | | |
 |---|---|
-| **Reale** | Scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. |
+| **Reale** | Scelta del commerciale all'apertura, scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. |
 | **MOCK** | **Verifica HubSpot.** Risponde in base allo scenario scelto nelle Impostazioni (*Azienda non presente*, *Azienda già presente*, *Errore HubSpot*). Nessuna chiamata a HubSpot, nessuna lettura, nessuna scrittura, nessuna credenziale. Il badge **HubSpot MOCK** resta sempre visibile. |
 | **Non ancora presente** | Creazione o aggiornamento di Azienda e Contatto in HubSpot, invio email, follow-up, collegamento al Navigatore Chiamata. |
 
@@ -24,16 +24,24 @@ nessuno scraping di Google Maps.
 2. **Carica estensione non pacchettizzata** e scegli la cartella **`agria-scout/extension`**
    (quella che contiene `manifest.json`).
 3. Fissa Agria Scout nella barra (icona del puzzle → puntina). Un clic sull'icona apre il pannello.
-4. Apri **Impostazioni** e indica nome e **ID owner HubSpot** del commerciale. Si salvano da soli
-   mentre scrivi («✓ Salvato» accanto al campo); «← Torna ad Agria Scout» chiude la pagina. Il
-   pannello mostra in alto «Commerciale attivo: {nome}».
+4. Alla prima apertura il pannello chiede **«Chi sta usando Agria Scout?»**: scegli il tuo nome.
+   Finché non scegli, scansione e Verifica HubSpot non partono.
 
-**Più commerciali:** le impostazioni restano in questo browser (`chrome.storage.local`, mai
-sincronizzate): ogni installazione è un commerciale diverso, con il suo nome e il suo ID owner.
+**Commerciali.** L'elenco è nel registro `extension/lib/operators.js`, l'unico punto in cui stanno
+nomi e ID owner HubSpot (il README non li ripete). Per aggiungere un commerciale basta
+una voce `{ name, hubspotOwnerId }`. Il commerciale attivo vale per la **sessione di Chrome**
+(`chrome.storage.session`): resta se chiudi e riapri il pannello, si sceglie di nuovo quando Chrome
+viene chiuso del tutto e riaperto. Non è una preferenza salvata e non si sincronizza. In alto nel
+pannello: «Commerciale attivo: {nome} · **Cambia**»; *Cambia* riapre la scelta.
+
+**Impostazioni** (limite pagine della scansione, scenario MOCK): si salvano da sole mentre scrivi
+(«✓ Salvato» accanto al campo), restano in questo browser (`chrome.storage.local`, mai
+sincronizzate) e mostrano i **Commerciali disponibili** con il loro Owner ID, in sola lettura.
+«← Torna ad Agria Scout» chiude la pagina.
 
 **Aggiornare dopo una nuova versione del codice:** in `chrome://extensions` premi ↻ sulla scheda
-di Agria Scout, poi chiudi e riapri il pannello laterale. Le impostazioni restano; la bozza in
-corso di una versione precedente si azzera. Serve Chrome 116 o successivo.
+di Agria Scout, poi chiudi e riapri il pannello laterale e scegli di nuovo il commerciale. Le
+impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo.
 
 ## Uso
 
@@ -74,10 +82,20 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
   Con un altro settore il campo è nascosto; se il commerciale sceglie Hospitality ricompare.
   Settore e tipo sono proposti dalle parole del sito e restano sempre *da verificare*.
 - `hs_lead_status`: `NEW` («Da contattare») per un nuovo prospect.
-- `hubspot_owner_id`: il commerciale delle Impostazioni, mai dedotto dal sito.
+- `hubspot_owner_id`: **solo** il commerciale attivo della sessione, mai dedotto dal sito e mai
+  salvato nella bozza del prospect: cambiando commerciale, Azienda e Contatto mostrano subito il
+  nuovo owner. `crmRecords(draft, commerciale)` (in `lib/draft.js`) prepara le proprietà da inviare
+  a HubSpot con l'owner del commerciale attivo, solo i campi visibili e la base giuridica solo se
+  confermata; senza commerciale attivo si ferma con un errore.
 - `hs_legal_basis`: suggerito «Legitimate interest – prospect/lead», da confermare a mano, solo
   per un Contatto valido.
 - Nome azienda: la ragione sociale non viene proposta (resta tra i dati legali rilevati).
+- Persone: un candidato che contiene parole del lessico privacy/legale (modalità, trattamento, dati
+  personali, categorie, finalità, base giuridica, interessato, diritti, periodo di conservazione,
+  protezione dei dati…) è il titolo di una sezione dell'informativa, non una persona: non compare tra
+  le persone rilevate, nel contesto rapido o nel Contatto. Una persona vera dell'informativa resta
+  («Il titolare del trattamento è Mario Rossi» → Mario Rossi, *Titolare del trattamento*), se supera
+  la normale validazione del nome.
 - Email: Scout propone una principale e una secondaria tra quelle aziendali; PEC, indirizzi di
   sistema ed email di una persona restano fuori, ma tutte le email restano selezionabili.
   Classificazione fissa: **aziendale generica** per gli alias funzionali (info, contact, visit,
@@ -151,6 +169,7 @@ extension/                 ← la cartella da caricare in Chrome
   lib/crmModel.js                modello HubSpot, proposte, contesto rapido
   lib/draft.js                   bozza: form, correzioni a mano, scelta della persona
   lib/validation.js · italy.js · names.js   controlli, province e regioni, nomi propri
+  lib/operators.js               registro dei commerciali e commerciale attivo della sessione
   lib/config.js                  impostazioni
   lib/hubspotClient.js           contratto HubSpot + client reale (non attivo)
   lib/mockHubspotClient.js       HubSpot simulato con i tre scenari
@@ -168,8 +187,8 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale). |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, e i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`). Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, e i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`). Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 
 `npm run e2e` usa Playwright, che **non** è una dipendenza del progetto: si installa al momento
@@ -191,4 +210,8 @@ con `npm i --no-save playwright && npx playwright install chromium`, oppure si i
 - Siti protetti da sistemi anti-bot possono rispondere con un errore: la pagina finisce tra quelle
   non raggiungibili.
 - La scansione si ferma se si chiude il pannello laterale; i dati raccolti fino a quel momento restano.
+- Il commerciale attivo si azzera anche quando l'estensione viene ricaricata o aggiornata (Chrome
+  svuota `chrome.storage.session`): va scelto di nuovo.
+- Il lessico privacy/legale è un elenco fisso (`LEGAL_WORDS` in `lib/parser.js`): titoli di sezione
+  con parole non in elenco possono ancora sembrare un nome accanto a un ruolo.
 - Pagine protette da Chrome (`chrome://`, Chrome Web Store, PDF) non si possono analizzare.
