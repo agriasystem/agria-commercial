@@ -5,18 +5,19 @@ un prospect, apre Agria Scout nel pannello laterale e preme **Scansione approfon
 legge le pagine informative dello stesso sito (Contatti, Chi siamo, Team, pagine legali…) e
 prepara i form **Azienda** e **Contatto** con le proprietà HubSpot di Agria. Ogni valore porta
 con sé la pagina da cui viene, il metodo di rilevazione e l'affidabilità, e si corregge a mano.
-HubSpot resta il CRM: Scout prepara i dati, non li conserva.
+HubSpot resta il CRM: Scout prepara i dati, controlla i doppioni e, solo con un clic esplicito
+del commerciale, crea in HubSpot la nuova Azienda e il suo Contatto.
 
 Costo zero: nessun server, nessun database, nessuna API a pagamento o di Google, nessuna AI,
-nessuno scraping di Google Maps.
+nessuno scraping di Google Maps. HubSpot si usa con le API gratuite del portale Agria.
 
 ## Stato: cosa è reale e cosa è MOCK
 
 | | |
 |---|---|
-| **Reale** | Scelta del commerciale all'apertura, scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. |
-| **MOCK** | **Verifica HubSpot.** Risponde in base allo scenario scelto nelle Impostazioni (*Azienda non presente*, *Azienda già presente*, *Errore HubSpot*). Nessuna chiamata a HubSpot, nessuna lettura, nessuna scrittura, nessuna credenziale. Il badge **HubSpot MOCK** resta sempre visibile. |
-| **Non ancora presente** | Creazione o aggiornamento di Azienda e Contatto in HubSpot, invio email, follow-up, collegamento al Navigatore Chiamata. |
+| **Reale** | Scelta del commerciale all'apertura, scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. In modalità **HubSpot reale**: verifica dei doppioni, creazione di una nuova Azienda, creazione del Contatto e associazione all'Azienda (API HubSpot 2026-09). |
+| **MOCK** | Modalità predefinita. Verifica e creazione rispondono in base allo scenario scelto nelle Impostazioni (*Azienda non presente*, *Azienda già presente*, *Errore HubSpot*): nessuna chiamata a HubSpot, nessuna credenziale. Il badge in alto dice sempre **HubSpot MOCK** o **HubSpot REALE**. |
+| **Non presente** | Modifica di aziende o contatti già in HubSpot (solo lettura e visualizzazione), associazione di un contatto già esistente, trattative, task di follow-up, invio email, Gmail, collegamento al Navigatore Chiamata. |
 
 ## Installazione
 
@@ -26,6 +27,7 @@ nessuno scraping di Google Maps.
 3. Fissa Agria Scout nella barra (icona del puzzle → puntina). Un clic sull'icona apre il pannello.
 4. Alla prima apertura il pannello chiede **«Chi sta usando Agria Scout?»**: scegli il tuo nome.
    Finché non scegli, scansione e Verifica HubSpot non partono.
+5. Per usare HubSpot reale: Impostazioni → **Connessione HubSpot reale** (vedi sotto).
 
 **Commerciali.** L'elenco è nel registro `extension/lib/operators.js`, l'unico punto in cui stanno
 nomi e ID owner HubSpot (il README non li ripete). Per aggiungere un commerciale basta
@@ -34,10 +36,108 @@ una voce `{ name, hubspotOwnerId }`. Il commerciale attivo vale per la **session
 viene chiuso del tutto e riaperto. Non è una preferenza salvata e non si sincronizza. In alto nel
 pannello: «Commerciale attivo: {nome} · **Cambia**»; *Cambia* riapre la scelta.
 
-**Impostazioni** (limite pagine della scansione, scenario MOCK): si salvano da sole mentre scrivi
-(«✓ Salvato» accanto al campo), restano in questo browser (`chrome.storage.local`, mai
-sincronizzate) e mostrano i **Commerciali disponibili** con il loro Owner ID, in sola lettura.
-«← Torna ad Agria Scout» chiude la pagina.
+**Impostazioni** (limite pagine della scansione, modalità HubSpot MOCK o reale, scenario MOCK): si
+salvano da sole mentre scrivi («✓ Salvato» accanto al campo), restano in questo browser
+(`chrome.storage.local`, mai sincronizzate) e mostrano i **Commerciali disponibili** con il loro
+Owner ID, in sola lettura. «← Torna ad Agria Scout» chiude la pagina.
+
+## HubSpot reale: Service Key e sicurezza
+
+**La chiave.** Scout usa una **Service Key** del portale HubSpot Agria (account 149362651, EU1) con
+**solo** questi permessi: `crm.objects.companies.read`, `crm.objects.companies.write`,
+`crm.objects.contacts.read`, `crm.objects.contacts.write`. In HubSpot: **Sviluppo → Chiavi →
+Service key** (la crea un super admin o chi ha l'accesso agli strumenti per sviluppatori).
+
+**Configurarla.** Impostazioni → *Connessione HubSpot reale* → incolla la chiave nel campo
+**Service Key HubSpot** (campo password) → **Salva chiave** → **Testa connessione**. Compare
+«✓ Service Key configurata» e poi «✓ Connessione HubSpot riuscita». Infine, in *Connessione
+HubSpot*, scegli **HubSpot reale**: il badge in alto diventa **HUBSPOT REALE**.
+- Senza chiave: «Configura la Service Key nelle Impostazioni.»
+- Il test fa **una sola lettura** innocua (la prima azienda), nessuna scrittura.
+  401 → «Service Key non valida o ruotata.» · 403 → «Service Key valida ma permessi insufficienti.»
+- Finché un test non è riuscito la modalità reale non lavora; se HubSpot rifiuta la chiave durante
+  il lavoro (401/403) si ferma di nuovo finché non si ripete il test.
+
+**Dove sta.** Solo in `chrome.storage.local` di questo browser (mai `chrome.storage.sync`), sotto una
+voce che legge soltanto il service worker. Dopo il salvataggio non si rivede più, nemmeno in
+parte. Tutte le richieste a HubSpot partono dal service worker: pannello e Impostazioni gli
+mandano messaggi e ricevono solo risultati già ripuliti; la chiave non compare mai in risposte,
+errori, log, URL o nel registro. Il pannello non ascolta gli eventi di `chrome.storage.local`
+(che porterebbero con sé anche la chiave): le impostazioni cambiate arrivano con un messaggio.
+
+> **Attenzione:** `chrome.storage.local` **non è un archivio cifrato**. Chi ha accesso al profilo
+> Chrome del computer può leggere la chiave. È una scelta temporanea per l'MVP interno Agria a
+> costo zero; in un'architettura futura la credenziale andrà spostata lato server.
+
+**Ruotarla.** In HubSpot: Sviluppo → Chiavi → Service key → la chiave → **Rotate** («Rotate and
+expire now» se è compromessa, altrimenti «Rotate and expire later»: la vecchia scade dopo 7 giorni).
+Poi in Scout: incolla la nuova chiave → **Salva chiave** → **Testa connessione**. HubSpot consiglia
+una rotazione ogni sei mesi.
+
+**Rimuoverla.** Impostazioni → **Rimuovi chiave** → **Conferma rimozione**. Per revocarla davvero,
+eliminala o ruotala anche in HubSpot.
+
+## Flusso HubSpot: verifica, doppioni, creazione
+
+1. **Scansione** del sito, controllo dei form.
+2. **Verifica HubSpot** (sola lettura). HubSpot non garantisce la deduplica delle aziende create
+   via API, quindi Scout controlla sempre prima:
+   - **dominio** normalizzato (minuscolo, senza protocollo, `www.` e barre finali; sottodomini
+     diversi restano diversi) → **⛔ Azienda già presente**: creazione bloccata, senza eccezioni;
+   - **email aziendale** (principale o secondaria) o **telefono** normalizzato → doppione forte;
+   - se non c'è altro: **nome** (senza forme societarie e parole generiche come «Agriturismo»,
+     «Cantina», «S.r.l.») **nella stessa città** → **⚠ Possibile duplicato**.
+
+   Per doppioni forti e possibili Scout mostra i record (nome, dominio, città, proprietario,
+   Lead Status, Record ID) e non crea nulla finché il commerciale non conferma «Ho controllato in
+   HubSpot: è un'azienda diversa». Confronto deterministico, nessuna AI.
+3. **Crea Azienda in HubSpot**: anteprima dei dati, poi un clic. Solo proprietà compilate;
+   `hubspot_owner_id` = commerciale attivo; `hs_lead_status` = `NEW`; niente
+   `tipo_struttura_hospitality` fuori dall'Hospitality. **Subito prima della scrittura Scout ripete
+   il controllo dei doppioni**: se nel frattempo un collega ha creato l'azienda → «L'azienda è stata
+   aggiunta a HubSpot da un'altra operazione. Nessun duplicato è stato creato.» Il pulsante si
+   disattiva al primo clic e il service worker blocca una seconda richiesta uguale.
+   Se le regole di validazione del portale (applicate alle API dalla versione 2026-09) rifiutano i
+   dati, Scout mostra il motivo in italiano e non riprova da solo.
+4. **Crea Contatto e associa** (azienda appena creata) oppure **Crea Contatto e associa a questa
+   Azienda** (azienda già presente, trovata con certezza). Prima Scout cerca il contatto per
+   email, telefono, cellulare e LinkedIn: se esiste → «Contatto già presente in HubSpot», nessun
+   nuovo contatto e nessuna modifica (owner, email, telefono e associazioni restano com'erano).
+   Il Contatto riceve l'owner del commerciale attivo; `hs_legal_basis` solo se confermata.
+   L'associazione usa l'endpoint ufficiale di associazione **predefinita** Contatto → Azienda.
+5. **Operazioni a metà.** Azienda creata ma Contatto no → «✓ Azienda creata ⚠ Contatto non creato»
+   e **Riprova creazione Contatto**: l'ID dell'azienda resta nella bozza, l'azienda non si ricrea.
+   Contatto creato ma associazione non riuscita → **Riprova associazione**.
+
+I record già presenti in HubSpot si leggono e si mostrano soltanto: nessun PATCH, nessun
+aggiornamento automatico. Il link «Apri in HubSpot» compare solo se è HubSpot a fornirlo nella
+risposta (campo `url`) e punta a quel record su hubspot.com; altrimenti si mostra il Record ID.
+
+**Registro HubSpot di questa sessione** (in fondo alla sezione HubSpot): ora, commerciale,
+operazione, azienda, Record ID, esito. Resta in `chrome.storage.session`, senza segreti.
+
+**Concorrenza tra commerciali.** Senza un backend né un lock distribuito non si può garantire
+l'atomicità assoluta: due commerciali che premono «Crea» nello stesso istante potrebbero ancora
+creare due aziende. Il nuovo controllo subito prima della scrittura riduce molto il rischio; inoltre
+le aziende create da Scout nella sessione contano come doppioni anche prima che la ricerca di
+HubSpot le indicizzi (HubSpot avvisa che un record nuovo può impiegare qualche istante a comparire).
+
+**API usate** (versione date-versioned `2026-09`, server `https://api.hubapi.com`):
+
+| Operazione | Endpoint |
+|---|---|
+| Test connessione | `GET /crm/objects/2026-09/companies?limit=1` |
+| Ricerca aziende | `POST /crm/objects/2026-09/companies/search` |
+| Lettura azienda | `GET /crm/objects/2026-09/companies/{companyId}` |
+| Creazione azienda | `POST /crm/objects/2026-09/companies` |
+| Ricerca contatti | `POST /crm/objects/2026-09/contacts/search` |
+| Creazione contatto | `POST /crm/objects/2026-09/contacts` |
+| Associazione Contatto → Azienda | `PUT /crm/objects/2026-09/contact/{contactId}/associations/default/company/{companyId}` |
+
+Un unico wrapper HTTP gestisce Bearer, timeout, 401, 403, 404, 409, 429 (con `Retry-After`, al
+massimo due nuovi tentativi), 5xx (si riprovano solo le letture), errori di rete ed errori di
+validazione. Dopo un esito incerto su una creazione (5xx, timeout, rete) Scout non riprova da solo:
+chiede una nuova verifica.
 
 **Aggiornare dopo una nuova versione del codice:** in `chrome://extensions` premi ↻ sulla scheda
 di Agria Scout, poi chiudi e riapri il pannello laterale e scegli di nuovo il commerciale. Le
@@ -61,7 +161,8 @@ impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo
 6. La **base giuridica** compare quando il Contatto è valido: si conferma a mano, e va confermata
    di nuovo se cambia la persona o il contatto smette di essere valido. Se serve, correggi il
    **contesto rapido**.
-7. **Verifica HubSpot** (MOCK) per provare il controllo dei doppioni.
+7. **Verifica HubSpot**, poi, se l'azienda non c'è, **Crea Azienda in HubSpot** e **Crea Contatto e
+   associa** (vedi *Flusso HubSpot*). In MOCK tutto è simulato.
 
 **Analizza solo questa pagina** legge soltanto la pagina aperta. Pagine dello stesso sito si
 sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene mai sovrascritta.
@@ -149,16 +250,19 @@ testo). Senza copia pulita il candidato resta, *da verificare*.
   script fisso sulle pagine.
 - Il content script (`extension/content/collector.js`) **legge soltanto**: non modifica la pagina.
   I test lo verificano sul codice e nel browser vero (nessuna mutazione del DOM).
-- I dati restano nel browser (`chrome.storage.session` per la bozza, `chrome.storage.local` per le
-  impostazioni). L'unica richiesta esterna oltre al sito analizzato è il font Public Sans da Google
-  Fonts, come nel Navigatore.
+- `https://api.hubapi.com/*`: le API HubSpot, chiamate solo dal service worker e solo in modalità
+  HubSpot reale (o con «Testa connessione»).
+- I dati restano nel browser (`chrome.storage.session` per la bozza, il commerciale attivo e il
+  registro HubSpot; `chrome.storage.local` per impostazioni e Service Key). Richieste esterne:
+  il sito analizzato, HubSpot (solo in modalità reale) e il font Public Sans da Google Fonts, come
+  nel Navigatore.
 
 ## Struttura
 
 ```
 extension/                 ← la cartella da caricare in Chrome
   manifest.json
-  background/service-worker.js   apre il pannello al clic sull'icona
+  background/service-worker.js   apre il pannello; unico punto che parla con HubSpot (Service Key)
   content/collector.js           fotografia di una pagina (iniettata o su HTML scaricato), sola lettura
   lib/parser.js                  estrattore: pagina → dati con fonte, metodo, affidabilità, evidenza
   lib/companyData.js             ragione sociale, P.IVA, CF, REA, CIN, SDI, social, sistemi esterni, settore
@@ -170,14 +274,18 @@ extension/                 ← la cartella da caricare in Chrome
   lib/draft.js                   bozza: form, correzioni a mano, scelta della persona
   lib/validation.js · italy.js · names.js   controlli, province e regioni, nomi propri
   lib/operators.js               registro dei commerciali e commerciale attivo della sessione
-  lib/config.js                  impostazioni
-  lib/hubspotClient.js           contratto HubSpot + client reale (non attivo)
-  lib/mockHubspotClient.js       HubSpot simulato con i tre scenari
-  sidepanel/                     pannello laterale (pageReader.js, render.js, sidepanel.js)
+  lib/config.js                  impostazioni (modalità MOCK/reale, scenario, limite pagine)
+  lib/hubspotService.js          operazioni HubSpot del service worker: chiave, verifica, creazione, registro
+  lib/hubspotClient.js           client HubSpot reale (API 2026-09), un solo wrapper HTTP
+  lib/hubspotDuplicates.js       ricerche e confronto dei doppioni (aziende e contatti)
+  lib/hubspotPayload.js          proprietà da scrivere per una nuova Azienda / un nuovo Contatto
+  lib/hubspotMessages.js         nomi dei messaggi pannello ↔ service worker
+  lib/mockHubspotClient.js       HubSpot simulato con i tre scenari, stessa interfaccia del reale
+  sidepanel/                     pannello laterale (pageReader.js, render.js, hubspotPanel.js, sidepanel.js)
   options/                       pagina Impostazioni
   ui/agria.css                   stile Agria condiviso
   icons/                         generate da tools/make-icons.js
-tests/                     test Node e siti di prova (fixtures)
+tests/                     test Node, siti di prova (fixtures), support/fakeHubspot.js (HubSpot finto)
 tools/                     e2e.js (prova nel browser), make-icons.js
 ```
 
@@ -187,13 +295,20 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, e i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`). Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 
 `npm run e2e` usa Playwright, che **non** è una dipendenza del progetto: si installa al momento
 con `npm i --no-save playwright && npx playwright install chromium`, oppure si indica con
 `NODE_PATH` una cartella `node_modules` che lo contiene già. I test non usano mai siti reali.
+
+**Nessun test automatico tocca il CRM reale.** I test unitari usano un `fetch` finto; l'e2e
+intercetta con Playwright ogni richiesta del service worker verso `https://api.hubapi.com` e la
+manda al finto HubSpot (`tests/support/fakeHubspot.js`), con chiavi finte. In più il browser di
+prova risolve `api.hubapi.com` su 127.0.0.1: una richiesta sfuggita fallirebbe, non arriverebbe
+a HubSpot. Le prove sul portale vero si fanno solo a mano (vedi la procedura nel report della
+Milestone 2), prima in sola lettura.
 
 ## Limiti noti
 
@@ -215,3 +330,14 @@ con `npm i --no-save playwright && npx playwright install chromium`, oppure si i
 - Il lessico privacy/legale è un elenco fisso (`LEGAL_WORDS` in `lib/parser.js`): titoli di sezione
   con parole non in elenco possono ancora sembrare un nome accanto a un ruolo.
 - Pagine protette da Chrome (`chrome://`, Chrome Web Store, PDF) non si possono analizzare.
+- HubSpot, doppioni: il telefono si cerca nelle forme di scrittura più comuni (con e senza +39,
+  spazi, trattini); un numero salvato in HubSpot in una forma insolita può sfuggire alla ricerca.
+  Il nome si confronta solo per uguaglianza della parte distintiva (niente somiglianze).
+- HubSpot, contatti: un contatto che condivide il telefono dell'azienda con un collega già in
+  HubSpot risulta «già presente» (regola prudente: nessun duplicato).
+- HubSpot: «Associa contatto esistente a questa Azienda» non è ancora disponibile (prossimo passo):
+  un contatto già presente si associa a mano in HubSpot. Nessuna modifica a record esistenti.
+- HubSpot: senza backend non c'è un lock tra commerciali (vedi *Concorrenza tra commerciali*).
+- La Service Key in `chrome.storage.local` non è cifrata (vedi *HubSpot reale: Service Key e sicurezza*).
+- Il link «Apri in HubSpot» dipende dal campo `url` restituito dall'API: se manca, si vede solo il
+  Record ID.

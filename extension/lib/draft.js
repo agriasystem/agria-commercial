@@ -8,6 +8,8 @@
 // contatto cambia persona o smette di essere valido.
 // Il proprietario HubSpot non sta nella bozza: è sempre il commerciale attivo (vedi crmRecords),
 // così cambiando commerciale Azienda e Contatto passano subito al nuovo owner.
+// La bozza conserva invece l'esito di HubSpot (verifica, ID dell'Azienda e del Contatto creati),
+// separato per MOCK e REALE: un'operazione a metà si riprende senza creare di nuovo l'Azienda.
 
 import {
   buildQuickContext, COMPANY_PROPS, CONTACT_PROPS, isContactReady, isPropVisible, proposeCompany, proposeContact,
@@ -37,7 +39,84 @@ export function emptyDraft() {
     mainPerson: null,
     mainPersonChosen: false,
     legalBasisConfirmed: false,
+    hubspot: { mock: emptyHubspotState(), real: emptyHubspotState() },
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// HubSpot: esito della verifica e record creati, per modalità
+
+const VERIFY_OUTCOMES = ['none', 'possible', 'certain', 'race'];
+
+/**
+ * verification: { outcome, matches, mock, at, message } | null · acknowledged: possibile doppione
+ * controllato dal commerciale · company / contact: record creati da Scout · contactMatches: contatti
+ * già presenti · companyError / contactError: l'ultimo errore, per riprovare.
+ */
+export const emptyHubspotState = () => ({
+  verification: null, acknowledged: false, company: null, contact: null, contactMatches: null, companyError: '', contactError: '',
+});
+
+export const hubspotState = (draft, mode) => draft.hubspot?.[mode] || emptyHubspotState();
+
+export function updateHubspot(draft, mode, patch) {
+  const next = structuredClone(draft);
+  next.hubspot = { mock: hubspotState(draft, 'mock'), real: hubspotState(draft, 'real'), ...next.hubspot };
+  next.hubspot[mode] = { ...hubspotState(draft, mode), ...patch };
+  return next;
+}
+
+/** I dati dell'azienda sono cambiati: la verifica non vale più (un'azienda già creata resta). */
+export function clearVerification(draft) {
+  let next = draft;
+  for (const mode of ['mock', 'real']) {
+    const st = hubspotState(next, mode);
+    if (st.verification || st.acknowledged || st.companyError) next = updateHubspot(next, mode, { verification: null, acknowledged: false, companyError: '' });
+  }
+  return next;
+}
+
+/** Il contatto è cambiato: via l'esito del controllo precedente (un contatto già creato resta). */
+export function clearContactCheck(draft) {
+  let next = draft;
+  for (const mode of ['mock', 'real']) {
+    const st = hubspotState(next, mode);
+    if (st.contactMatches || (st.contactError && !st.contact)) next = updateHubspot(next, mode, { contactMatches: null, contactError: '' });
+  }
+  return next;
+}
+
+/** Azienda a cui collegare il Contatto: quella creata da Scout, oppure l'unica trovata con certezza. */
+export function hubspotTarget(state) {
+  if (state.company) return { ...state.company, existing: false };
+  const certain = (state.verification?.matches || []).filter((m) => m.level === 'certain');
+  return state.verification?.outcome === 'certain' && certain.length === 1 ? { ...certain[0], existing: true } : null;
+}
+
+const s = (v, max = 2000) => (typeof v === 'string' ? v.slice(0, max) : '');
+const strings = (list) => (Array.isArray(list) ? list.filter((x) => typeof x === 'string').slice(0, 10) : []);
+const MATCH_FIELDS = ['id', 'name', 'domain', 'city', 'ownerId', 'ownerName', 'leadStatus', 'url', 'level', 'email', 'phone', 'mobile', 'linkedin', 'jobtitle'];
+const cleanMatch = (m) => ({ ...Object.fromEntries(MATCH_FIELDS.map((k) => [k, s(m?.[k], 300)])), reasons: strings(m?.reasons) });
+const cleanMatches = (list) => (Array.isArray(list) ? list.filter((m) => m && typeof m === 'object').slice(0, 20).map(cleanMatch) : []);
+
+function restoreHubspotState(raw) {
+  const state = emptyHubspotState();
+  if (!raw || typeof raw !== 'object') return state;
+  const v = raw.verification;
+  if (v && VERIFY_OUTCOMES.includes(v.outcome)) state.verification = { outcome: v.outcome, matches: cleanMatches(v.matches), mock: v.mock === true, at: s(v.at, 40), message: s(v.message, 300) };
+  state.acknowledged = raw.acknowledged === true && state.verification?.outcome === 'possible';
+  const c = raw.company;
+  if (c && typeof c.id === 'string' && c.id) {
+    state.company = { id: s(c.id, 40), url: s(c.url, 300), name: s(c.name, 300), createdAt: s(c.createdAt, 40), ownerId: s(c.ownerId, 40), ownerName: s(c.ownerName, 120), mock: c.mock === true };
+  }
+  const p = raw.contact;
+  if (p && typeof p.id === 'string' && p.id) {
+    state.contact = { id: s(p.id, 40), url: s(p.url, 300), name: s(p.name, 300), createdAt: s(p.createdAt, 40), companyId: s(p.companyId, 40), associated: p.associated === true, mock: p.mock === true };
+  }
+  state.contactMatches = Array.isArray(raw.contactMatches) ? cleanMatches(raw.contactMatches) : null;
+  state.companyError = s(raw.companyError, 1000);
+  state.contactError = s(raw.contactError, 1000);
+  return state;
 }
 
 // campo non toccato: prende la proposta; campo corretto a mano: resta, e la proposta diventa un'alternativa
@@ -168,6 +247,7 @@ export function restoreDraft(raw) {
     draft.mainPerson = typeof raw.mainPerson === 'string' && draft.site.people[raw.mainPerson] ? raw.mainPerson : null;
     draft.mainPersonChosen = raw.mainPersonChosen === true && Boolean(draft.mainPerson);
     draft.legalBasisConfirmed = raw.legalBasisConfirmed === true && contactReady(draft);
+    draft.hubspot = { mock: restoreHubspotState(raw.hubspot?.mock), real: restoreHubspotState(raw.hubspot?.real) };
     return draft;
   } catch {
     return emptyDraft();

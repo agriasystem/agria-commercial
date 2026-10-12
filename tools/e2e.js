@@ -9,6 +9,11 @@
 // info@/visit@, cantina, contatto a mano, informativa privacy senza persone false). Scelta del
 // commerciale all'apertura, cambio durante la sessione e nuova sessione di Chrome. Impostazioni con
 // salvataggio automatico e commerciali disponibili.
+// HubSpot REALE contro un HubSpot FINTO (tests/support/fakeHubspot.js): Playwright intercetta ogni
+// richiesta del service worker verso https://api.hubapi.com, e in più api.hubapi.com punta a
+// 127.0.0.1, così una richiesta sfuggita fallisce invece di raggiungere il CRM vero. Service Key,
+// test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già
+// presente, contatto già presente, creazione di Azienda e Contatto con errore e nuovo tentativo.
 // Controlla anche che le pagine analizzate non vengano modificate e che la scansione non esca dal
 // dominio né scarichi due volte la stessa pagina. Schermate in .tmp/e2e/.
 //
@@ -25,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPERATORS } from '../extension/lib/operators.js';
+import { createFakeHubspot } from '../tests/support/fakeHubspot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EXT = path.join(ROOT, 'extension');
@@ -51,6 +57,9 @@ const SITES = {
   'perticaia-caso.test': { '/': 'caso-perticaia.html', '/privacy-policy': 'caso-perticaia-privacy.html' },
 };
 const [MATTEO, ALESSANDRO] = OPERATORS;
+// chiavi finte: il finto HubSpot accetta solo FAKE_KEY
+const FAKE_KEY = 'e2e-finta-service-key-0000000000000000';
+const WRONG_KEY = 'e2e-chiave-sbagliata-11111111111111111';
 const ownerText = (o) => `${o.name} · ID ${o.hubspotOwnerId}`;
 
 let chromium;
@@ -106,7 +115,7 @@ function startServer() {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-async function run(context, site) {
+async function run(context, site, fake) {
   let [worker] = context.serviceWorkers();
   if (!worker) worker = await context.waitForEvent('serviceworker', { timeout: 15000 });
   const extId = new URL(worker.url()).host;
@@ -192,7 +201,8 @@ async function run(context, site) {
   console.log('\nIntestazione e stato MOCK');
   check('intestazione AGRIA SCOUT', (await text('header')).includes('AGRIA SCOUT'));
   check('badge MOCK visibile in alto', await panel.isVisible('header .badge.mock'));
-  equal('scenario MOCK iniziale', await text('#mock-scenario'), 'Azienda non presente');
+  includes('scenario MOCK iniziale', await text('#hubspot-hint'), 'Scenario: Azienda non presente');
+  equal('badge MOCK in alto', (await text('header [data-mode-badge]')).trim(), 'HubSpot MOCK');
   check('pulsante principale «Scansione approfondita»', (await text('#deep-scan')).trim() === 'Scansione approfondita');
 
   console.log('\nScelta del commerciale: «Chi sta usando Agria Scout?»');
@@ -429,23 +439,28 @@ async function run(context, site) {
   let v = await verify();
   check('pulsante disattivato durante la verifica (niente doppio invio)', v.disabled);
   equal('scenario "non presente"', v.kind, 'not_found');
+  includes('esito "non presente"', v.text, '✓ Non presente in HubSpot');
   includes('esito dichiarato come simulato', v.text, 'MOCK');
+  check('MOCK: anteprima e «Crea Azienda in HubSpot» (simulata)', await panel.isVisible('#create-company') && (await text('#company-step')).includes('Da contattare (NEW)'));
+  const hint = (t) => panel.waitForFunction((x) => document.querySelector('#hubspot-hint').textContent.includes(x), t);
   await options.check('input[value="found"]');
-  await panel.waitForFunction(() => document.querySelector('#mock-scenario').textContent === 'Azienda già presente');
+  await hint('Azienda già presente');
   v = await verify();
   equal('scenario "già presente"', v.kind, 'found');
   check('azienda simulata con il dominio', v.text.includes('agriturismo-lamora.test') && v.text.includes('MOCK-1001'), v.text);
+  check('già presente: nessuna creazione possibile', await panel.isHidden('#company-step'));
   await options.check('input[value="error"]');
-  await panel.waitForFunction(() => document.querySelector('#mock-scenario').textContent === 'Errore HubSpot');
+  await hint('Errore HubSpot');
   v = await verify();
   equal('scenario "errore"', v.kind, 'error');
   includes('messaggio di errore chiaro', v.text, 'Errore simulato');
   await options.check('input[value="not_found"]');
-  await panel.waitForFunction(() => document.querySelector('#mock-scenario').textContent === 'Azienda non presente');
-  check('impostazioni: HubSpot reale non attivabile', await options.isDisabled('input[name="mode"][value="real"]'));
+  await hint('Azienda non presente');
+  check('impostazioni: HubSpot reale ora selezionabile', await options.isEnabled('input[name="mode"][value="real"]'));
   await panel.fill('#company-domain', 'dominio non valido');
   v = await verify();
   equal('dominio non valido: niente verifica', v.kind, 'warn');
+  includes('dominio non valido: spiegato', v.text, 'Il dominio non è valido');
   await panel.fill('#company-domain', 'agriturismo-lamora.test');
 
   console.log('\nAnnullamento della scansione');
@@ -565,6 +580,167 @@ async function run(context, site) {
   check('conferma tolta', !(await panel.isChecked('#legal-basis-confirm')));
   await shot('4-caso-perticaia');
 
+  // ---------------------------------------------------------------------------------------------
+  console.log('\nHubSpot REALE (finto HubSpot locale: nessuna chiamata al CRM vero)');
+  const blocker = () => panel.textContent('#hubspot-blocker').then((t) => t.trim());
+  const blockerIs = (t) => panel.waitForFunction((x) => document.querySelector('#hubspot-blocker').textContent.trim() === x, t, { timeout: 5000 }).then(() => true, () => false);
+  const lineIs = (sel, t) => options.waitForFunction(([s, x]) => document.querySelector(s).textContent.includes(x), [sel, t], { timeout: 8000 }).then(() => true, () => false);
+  await options.check('input[name="mode"][value="real"]');
+  await panel.waitForFunction(() => document.querySelector('header [data-mode-badge]').textContent.trim() === 'HubSpot REALE');
+  check('badge «HubSpot REALE» ben distinto', await panel.$eval('header [data-mode-badge]', (b) => b.classList.contains('real') && !b.classList.contains('mock')));
+  check('senza chiave: «Configura la Service Key nelle Impostazioni.»', await blockerIs('Configura la Service Key nelle Impostazioni.'), await blocker());
+  check('senza chiave: Verifica HubSpot disattivata', await panel.isDisabled('#verify'));
+  includes('Impostazioni: stesso avviso', await options.textContent('#mode-warning'), 'Configura la Service Key nelle Impostazioni.');
+  equal('campo della chiave di tipo password', await options.getAttribute('#service-key', 'type'), 'password');
+
+  await options.fill('#service-key', WRONG_KEY);
+  await options.click('#save-key');
+  check('chiave salvata: «✓ Service Key configurata»', await lineIs('#key-status', '✓ Service Key configurata'));
+  equal('la chiave non resta nel campo', await options.inputValue('#service-key'), '');
+  check('la chiave non si rivede, nemmeno in parte', !(await options.textContent('body')).includes(WRONG_KEY.slice(-6)));
+  check('chiave non ancora testata: modalità reale ferma', await blockerIs('Connessione HubSpot non verificata: nelle Impostazioni premi «Testa connessione».'), await blocker());
+  await options.click('#test-connection');
+  check('test connessione 401: «Service Key non valida o ruotata.»', await lineIs('#connection-status', 'Service Key non valida o ruotata.'));
+  await options.fill('#service-key', FAKE_KEY);
+  await options.click('#save-key');
+  await lineIs('#connection-status', 'Connessione non ancora testata');
+  fake.force('GET', /companies$/, fake.response.error(403, 'This app hasn\'t been granted all required scopes'));
+  await options.click('#test-connection');
+  check('test connessione 403: «Service Key valida ma permessi insufficienti.»', await lineIs('#connection-status', 'Service Key valida ma permessi insufficienti.'));
+  const readsBefore = fake.state.requests.length;
+  await options.click('#test-connection');
+  check('test connessione 200: «✓ Connessione HubSpot riuscita»', await lineIs('#connection-status', '✓ Connessione HubSpot riuscita'));
+  const testCall = fake.state.requests.slice(readsBefore);
+  check('il test fa una sola lettura innocua', testCall.length === 1 && testCall[0].method === 'GET' && testCall[0].path === '/crm/objects/2026-09/companies', JSON.stringify(testCall));
+  check('Bearer con la chiave salvata', testCall[0].authorized);
+  await options.screenshot({ path: path.join(OUT, '7-impostazioni-hubspot-reale.png'), fullPage: true });
+  check('pannello pronto', await blockerIs(''), await blocker());
+  check('Verifica HubSpot attiva', await panel.isEnabled('#verify'));
+  const panelText = await panel.evaluate(() => document.body.textContent + [...document.querySelectorAll('input, textarea')].map((i) => i.value).join(' '));
+  check('la chiave non arriva mai al pannello', !panelText.includes(FAKE_KEY) && !JSON.stringify(await panel.evaluate(() => chrome.storage.session.get(null))).includes(FAKE_KEY));
+
+  console.log('\nHubSpot REALE: 429 e errore di validazione (Perticaia, cantina)');
+  const writes = () => fake.state.requests.filter((r) => r.method !== 'GET' && !r.path.endsWith('/search'));
+  fake.force('POST', /companies\/search$/, fake.response.json(429, { status: 'error', errorType: 'RATE_LIMIT', message: 'secondly limit' }, { 'retry-after': '1' }));
+  v = await verify();
+  equal('429 con Retry-After: si riprova e la verifica riesce', v.kind, 'not_found');
+  fake.force('POST', /companies\/search$/, fake.response.json(429, { status: 'error', errorType: 'RATE_LIMIT', message: 'secondly limit' }, { 'retry-after': '1' }), 3);
+  v = await verify();
+  equal('429 insistente: errore', v.kind, 'error');
+  includes('429: messaggio chiaro', v.text, 'troppe richieste');
+  v = await verify();
+  equal('di nuovo disponibile', v.kind, 'not_found');
+  const perticaiaPreview = await text('#company-step');
+  check('anteprima: owner del commerciale attivo', perticaiaPreview.includes(`${ALESSANDRO.name} (${ALESSANDRO.hubspotOwnerId})`), perticaiaPreview);
+  check('anteprima cantina: niente tipo struttura', !perticaiaPreview.includes('tipo_struttura_hospitality'));
+  fake.requireProperty('companies', 'industry');
+  await press('#create-company');
+  await panel.waitForFunction(() => document.querySelector('#company-step').textContent.includes('Azienda non creata'), null, { timeout: 15000 });
+  const validation = await text('#company-step');
+  includes('validation error: leggibile', validation, 'HubSpot ha rifiutato i dati per le regole del portale');
+  includes('validation error: proprietà indicata', validation, 'industry (industry): obbligatorio per una regola condizionale del portale.');
+  equal('validation error: nessuna azienda creata', fake.state.companies.length, 0);
+  fake.state.required.companies.length = 0;
+
+  console.log('\nHubSpot REALE: race condition (un collega la crea nel frattempo)');
+  const colleague = fake.addCompany({ name: 'Perticaia', domain: 'perticaia-caso.test', hubspot_owner_id: MATTEO.hubspotOwnerId, hs_lead_status: 'NEW' });
+  const postsBefore = writes().length;
+  await press('#create-company');
+  await panel.waitForFunction(() => document.querySelector('#verify-result').textContent.includes("aggiunta a HubSpot da un'altra operazione"), null, { timeout: 15000 });
+  includes('race: messaggio', await text('#verify-result'), "L'azienda è stata aggiunta a HubSpot da un'altra operazione. Nessun duplicato è stato creato.");
+  includes('race: record del collega', await text('#verify-result'), `Record ID ${colleague}`);
+  equal('race: nessuna scrittura', writes().length, postsBefore);
+  check('race: nessun pulsante di creazione', await panel.isHidden('#company-step'));
+
+  console.log('\nHubSpot REALE: azienda già presente (Cantina Rossi) e contatto già presente');
+  const existingCompany = fake.addCompany({ name: 'Cantina Rossi', domain: 'cantinarossi.test', city: 'Foligno', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'NEW' });
+  const existingContact = fake.addContact({ firstname: 'Mario', lastname: 'Rossi', email: 'mario.rossi@cantinarossi.test', hubspot_owner_id: ALESSANDRO.hubspotOwnerId });
+  r = await deepScan(cantina);
+  equal('scansione completata', r.state, 'ok');
+  v = await verify();
+  equal('azienda esistente: bloccata', v.kind, 'found');
+  for (const part of ['⛔ Azienda già presente in HubSpot', 'Cantina Rossi', 'Dominio: cantinarossi.test', 'Città: Foligno', 'Proprietario: Alessandro Poponi', 'Lead Status: Da contattare (NEW)', `Record ID ${existingCompany}`, 'stesso dominio']) includes(`già presente: ${part}`, v.text, part);
+  equal('«Apri in HubSpot»: link dato dall\'API', await panel.$eval('#verify-result a.src', (a) => a.href), `https://app-eu1.hubspot.com/contacts/149362651/record/0-2/${existingCompany}`);
+  check('nessuna possibilità di creare un doppione certo', await panel.isHidden('#company-step') && !(await panel.$('#create-company')));
+  equal('contatto per l\'azienda esistente', (await text('#create-contact')).trim(), 'Crea Contatto e associa a questa Azienda');
+  await press('#create-contact');
+  await panel.waitForFunction(() => document.querySelector('#contact-step').textContent.includes('Contatto già presente in HubSpot'), null, { timeout: 15000 });
+  const contactExists = await text('#contact-step');
+  includes('contatto esistente: record', contactExists, `Record ID ${existingContact}`);
+  includes('contatto esistente: motivo', contactExists, 'stessa email');
+  check('contatto esistente: nessuna creazione, nessuna associazione', fake.state.contacts.length === 1 && fake.state.associations.length === 0);
+  check('nessuna modifica a record esistenti', fake.state.requests.every((q) => q.method !== 'PATCH' && q.method !== 'DELETE'));
+
+  console.log('\nHubSpot REALE: azienda assente → Azienda, poi Contatto (errore e nuovo tentativo) e associazione');
+  r = await deepScan(home);
+  equal('scansione completata', r.state, 'ok');
+  equal('contatto valido', `${await value('contact-firstname')} ${await value('contact-lastname')}`, 'Maria Bianchi');
+  if (!(await panel.isChecked('#legal-basis-confirm'))) await panel.check('#legal-basis-confirm');
+  const companiesBefore = fake.state.companies.length;
+  const companyPosts = () => writes().filter((q) => q.path === '/crm/objects/2026-09/companies').length;
+  const companyPostsBefore = companyPosts();
+  v = await verify();
+  equal('azienda assente: «✓ Non presente in HubSpot»', v.kind, 'not_found');
+  const preview = await text('#company-step');
+  for (const part of ['Verranno scritti questi dati', 'hubspot_owner_id', `${ALESSANDRO.name} (${ALESSANDRO.hubspotOwnerId})`, 'Da contattare (NEW)', 'tipo_struttura_hospitality', 'Agriturismo']) includes(`anteprima: ${part}`, preview, part);
+  equal('la verifica non crea nulla', fake.state.companies.length, companiesBefore);
+  // doppio clic: un solo record
+  await panel.evaluate(() => {
+    const button = document.querySelector('#create-company');
+    button.click();
+    button.click();
+  });
+  await panel.waitForFunction(() => document.querySelector('#company-step').textContent.includes('✓ Azienda creata in HubSpot'), null, { timeout: 15000 });
+  const created = fake.state.companies.at(-1);
+  equal('doppio clic: una sola azienda creata', companyPosts() - companyPostsBefore, 1);
+  const createdBox = await text('#company-step');
+  for (const part of ['✓ Azienda creata in HubSpot', `Record ID ${created.id}`, `Proprietario: ${ALESSANDRO.name}`, 'Creata il ']) includes(`azienda creata: ${part}`, createdBox, part);
+  equal('azienda creata: link', await panel.$eval('#company-step a.src', (a) => a.href), created.url);
+  equal('owner = commerciale attivo', created.properties.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);
+  equal('Lead Status NEW', created.properties.hs_lead_status, 'NEW');
+  check('nessuna proprietà vuota inviata', Object.values(created.properties).every((x) => x !== ''), JSON.stringify(created.properties));
+  fake.force('POST', /contacts$/, fake.response.error(500, 'Internal error'));
+  equal('contatto: «Crea Contatto e associa»', (await text('#create-contact')).trim(), 'Crea Contatto e associa');
+  await press('#create-contact');
+  await panel.waitForFunction(() => document.querySelector('#contact-step').textContent.includes('Contatto non creato'), null, { timeout: 15000 });
+  const partial = await text('#contact-step');
+  includes('operazione parziale: ✓ Azienda creata', partial, '✓ Azienda creata');
+  includes('operazione parziale: ⚠ Contatto non creato', partial, '⚠ Contatto non creato');
+  equal('«Riprova creazione Contatto»', (await text('#create-contact')).trim(), 'Riprova creazione Contatto');
+  await panel.reload();
+  await panel.waitForSelector('#app:not([hidden])');
+  await panel.waitForFunction(() => document.querySelector('#company-step').textContent.includes('✓ Azienda creata in HubSpot'));
+  includes('ID dell\'azienda conservato nella bozza', await text('#company-step'), `Record ID ${created.id}`);
+  await press('#create-contact');
+  await panel.waitForFunction(() => document.querySelector('#contact-step').textContent.includes('✓ Contatto creato e associato'), null, { timeout: 15000 });
+  const contactRecord = fake.state.contacts.at(-1);
+  equal('nuovo tentativo: nessuna nuova azienda', companyPosts() - companyPostsBefore, 1);
+  equal('un solo contatto creato', fake.state.contacts.filter((c) => c.properties.email === 'maria.bianchi@agriturismo-lamora.test').length, 1);
+  equal('contatto: owner', contactRecord.properties.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);
+  equal('contatto: base giuridica confermata e inviata', contactRecord.properties.hs_legal_basis, 'Legitimate interest – prospect/lead');
+  check('associazione Contatto → Azienda', fake.state.associations.some((a) => a.contactId === contactRecord.id && a.companyId === created.id), JSON.stringify(fake.state.associations));
+  await panel.$eval('#audit-box', (d) => { d.open = true; });
+  const audit = await text('#audit-list');
+  for (const part of ['Verifica HubSpot', 'Creazione Azienda', 'Successo', 'Creazione Contatto e associazione', ALESSANDRO.name, `ID ${created.id}`]) includes(`registro: ${part}`, audit, part);
+  check('registro senza chiave', !audit.includes(FAKE_KEY));
+  await shot('5-hubspot-reale');
+  await panel.locator('section.hubspot').screenshot({ path: path.join(OUT, '5b-sezione-hubspot.png') });
+
+  console.log('\nHubSpot REALE: chiave rifiutata durante il lavoro, poi rimossa');
+  fake.force('POST', /companies\/search$/, fake.response.error(401, 'expired'));
+  await press('#verify');
+  await panel.waitForFunction(() => document.querySelector('#verify-result').textContent.includes('Service Key non valida o ruotata.'), null, { timeout: 15000 });
+  includes('401 durante la verifica', await text('#verify-result'), 'Service Key non valida o ruotata.');
+  check('401: Verifica HubSpot disattivata', await panel.waitForFunction(() => document.querySelector('#verify').disabled, null, { timeout: 5000 }).then(() => true, () => false));
+  check('modalità reale ferma fino a un nuovo test', await blockerIs('Connessione HubSpot non verificata: nelle Impostazioni premi «Testa connessione».'), await blocker());
+  await options.click('#remove-key');
+  equal('rimozione: chiede conferma', (await options.textContent('#remove-key')).trim(), 'Conferma rimozione');
+  await options.click('#remove-key');
+  check('chiave rimossa', await lineIs('#key-status', 'Nessuna Service Key configurata.'));
+  check('chiave rimossa: «Configura la Service Key nelle Impostazioni.»', await blockerIs('Configura la Service Key nelle Impostazioni.'), await blocker());
+  check('ogni richiesta verso HubSpot è passata dal finto server', fake.state.requests.length > 0);
+  check('solo endpoint 2026-09', fake.state.requests.every((q) => q.path.startsWith('/crm/objects/2026-09/')), JSON.stringify(fake.state.requests.map((q) => q.path)));
+
   console.log('\nImpostazioni: «← Torna ad Agria Scout»');
   const closing = options.waitForEvent('close', { timeout: 10000 }).then(() => true, () => false);
   await options.click('#back').catch(() => {}); // la scheda si chiude durante il clic
@@ -593,6 +769,15 @@ async function newSession(context) {
   check('nuova sessione: nessun errore JavaScript', errors.length === 0, errors.join(' | '));
 }
 
+// ogni richiesta verso api.hubapi.com (dal service worker) va al finto HubSpot, mai al CRM vero
+async function routeHubspot(context, fake) {
+  await context.route('https://api.hubapi.com/**', (route) => {
+    const req = route.request();
+    const res = fake.handle({ method: req.method(), url: req.url(), headers: req.headers(), body: req.postData() || '' });
+    return route.fulfill({ status: res.status, headers: res.headers, body: res.body });
+  });
+}
+
 async function main() {
   fs.rmSync(PROFILE, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
@@ -605,13 +790,16 @@ async function main() {
     args: [
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
-      '--host-resolver-rules=MAP *.test 127.0.0.1',
+      // api.hubapi.com su 127.0.0.1: una richiesta non intercettata fallisce, non arriva a HubSpot
+      '--host-resolver-rules=MAP *.test 127.0.0.1, MAP api.hubapi.com 127.0.0.1',
       '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable',
     ],
   });
+  const fake = createFakeHubspot({ token: FAKE_KEY });
   let context = await launch();
   try {
-    await run(context, site);
+    await routeHubspot(context, fake);
+    await run(context, site, fake);
     await context.close();
     console.log('\nNuova sessione di Chrome (stesso profilo)');
     context = await launch();

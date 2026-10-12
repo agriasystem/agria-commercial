@@ -1,7 +1,10 @@
-// Impostazioni di Agria Scout, salvate in chrome.storage.local di questo browser: limite della
-// scansione e scenario MOCK. Nessuna credenziale: in questa versione HubSpot è soltanto simulato.
+// Impostazioni di Agria Scout, salvate in chrome.storage.local di questo browser: modalità HubSpot
+// (MOCK o reale), scenario MOCK, limite della scansione. Qui non c'è nessuna credenziale: la Service
+// Key la gestisce solo il service worker (hubspotService.js), in una voce a parte.
 // Il proprietario HubSpot non è un'impostazione: è il commerciale scelto all'apertura (operators.js).
 // Niente chrome.storage.sync, nessuna condivisione tra browser o utenti.
+
+export const HUBSPOT_MODES = Object.freeze({ mock: 'HubSpot MOCK', real: 'HubSpot reale' });
 
 export const MOCK_SCENARIOS = Object.freeze({
   not_found: 'Azienda non presente',
@@ -26,7 +29,7 @@ export function normalizeConfig(raw) {
   const maxPages = Number(s.maxPages);
   return {
     hubspot: {
-      mode: 'mock', // V1: l'unica modalità disponibile
+      mode: Object.hasOwn(HUBSPOT_MODES, h.mode) ? h.mode : DEFAULT_CONFIG.hubspot.mode,
       mockScenario: Object.hasOwn(MOCK_SCENARIOS, h.mockScenario) ? h.mockScenario : DEFAULT_CONFIG.hubspot.mockScenario,
       mockDelayMs: Number.isInteger(delay) && delay >= 0 && delay <= 5000 ? delay : DEFAULT_CONFIG.hubspot.mockDelayMs,
     },
@@ -47,6 +50,9 @@ export function applySetting(config, name, value) {
     const n = Number(v);
     if (!v || !Number.isInteger(n) || n < SCAN_LIMITS.min || n > SCAN_LIMITS.max) return { config: next, error: `Scegli un numero da ${SCAN_LIMITS.min} a ${SCAN_LIMITS.max}.` };
     next.scan.maxPages = n;
+  } else if (name === 'mode') {
+    if (!Object.hasOwn(HUBSPOT_MODES, v)) return { config: next, error: 'Modalità non prevista.' };
+    next.hubspot.mode = v;
   } else if (name === 'mockScenario') {
     if (!Object.hasOwn(MOCK_SCENARIOS, v)) return { config: next, error: 'Scenario non previsto.' };
     next.hubspot.mockScenario = v;
@@ -67,9 +73,18 @@ export async function saveConfig(config, storage = chrome.storage.local) {
   return clean;
 }
 
+// Le altre pagine si avvisano con un messaggio, non con chrome.storage.onChanged: quell'evento
+// porterebbe al pannello anche le modifiche della Service Key, che sta nello stesso storage.
+const CHANGED = 'agria:config-changed';
+
+/** Dopo un salvataggio: avvisa pannello e service worker (nessun dato nel messaggio). */
+export function notifyConfigChanged() {
+  return chrome.runtime.sendMessage({ type: CHANGED }).catch(() => {}); // nessun pannello aperto
+}
+
 /** Avvisa quando le impostazioni cambiano (anche da un'altra pagina dell'estensione). */
 export function onConfigChange(callback) {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes[KEY]) callback(normalizeConfig(changes[KEY].newValue));
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === CHANGED) loadConfig().then(callback).catch(() => {});
   });
 }

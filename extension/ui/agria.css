@@ -34,6 +34,9 @@ h1,h2,h3{margin:0;font-size:inherit}
 .brand .n{font-weight:800;font-size:15px;letter-spacing:.07em}
 .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap;line-height:1.3}
 .badge.mock{background:var(--mock-bg);color:var(--mock);border:1px solid currentColor}
+/* HubSpot REALE: pieno, nel verde Agria, con un punto che lo distingue a colpo d'occhio dal MOCK */
+.badge.real{background:var(--accent);color:var(--accent-ink);border:1px solid var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.badge.real::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent-ink);margin-right:6px}
 .tbtn{padding:6px 10px;border:1px solid var(--line-strong);border-radius:999px;background:var(--surface);font-weight:600;font-size:12.5px}
 .tbtn:hover{border-color:var(--accent)}
 
@@ -180,6 +183,31 @@ h1,h2,h3{margin:0;font-size:inherit}
 .result[data-kind="found"],.result[data-kind="warn"]{background:var(--warn-bg);border-color:var(--warn)}
 .result[data-kind="error"]{background:var(--danger-bg);border-color:var(--danger)}
 .result .mocknote{font-size:11.5px;color:var(--muted);margin-top:6px}
+.result strong + strong{margin-top:2px}
+
+/* HubSpot: passaggi, anteprima, record trovati, registro */
+.steps{display:flex;gap:6px;list-style:none;margin:0 0 10px;padding:0;counter-reset:step;flex-wrap:wrap}
+.steps li{counter-increment:step;font-size:11.5px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:4px}
+.steps li::before{content:counter(step);display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:10.5px;font-weight:800}
+.hubspot .ready{margin:0 0 10px}
+.crm-step{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line-strong);display:flex;flex-direction:column;gap:8px}
+.crm-step .result{margin-top:0}
+.crm-step label.confirm{display:flex;gap:6px;align-items:center;font-size:12.5px;font-weight:600}
+.crm-step label.confirm input{accent-color:var(--accent)}
+.step-title{font-size:13px;font-weight:700}
+.preview{margin:0;display:grid;grid-template-columns:minmax(0,40%) minmax(0,1fr);gap:4px 10px;font-size:12px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--field)}
+.preview dt{color:var(--muted);font-weight:600;overflow-wrap:anywhere}
+.preview dt code{display:block;font-size:10px;font-weight:500;opacity:.8}
+.preview dd{margin:0;overflow-wrap:anywhere;white-space:pre-line}
+.hs-record{margin-top:8px;padding:8px 10px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);display:flex;flex-direction:column;gap:2px}
+.hs-record p{margin:0;font-size:12.5px}
+.hs-id{font-variant-numeric:tabular-nums;color:var(--muted)}
+.audit{margin-top:12px;font-size:12px}
+.audit summary{cursor:pointer;color:var(--muted);font-weight:600}
+.audit-list{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.audit-list li{display:flex;flex-direction:column;padding:4px 0;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.audit-list li.bad{color:var(--danger)}
+.audit-list .when{color:var(--muted);font-size:11px}
 
 /* impostazioni */
 .choices{display:flex;flex-direction:column;gap:8px;border:0;margin:0;padding:0;min-width:0}
@@ -194,5 +222,12 @@ h1,h2,h3{margin:0;font-size:inherit}
 .autosave{margin:6px 0 12px;padding:8px 10px;border-radius:10px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;font-weight:600}
 .saved-flag{margin-left:6px;color:var(--accent);font-size:11px;letter-spacing:0;text-transform:none;font-weight:700}
 .saved.err{color:var(--danger)}
+.key-status{margin:8px 0 0;font-size:12.5px;font-weight:600}
+.key-status:empty{display:none}
+.key-note{margin:10px 0 0;font-size:12px}
+.key-status[data-kind="ok"]{color:var(--accent)}
+.key-status[data-kind="warn"]{color:var(--warn)}
+.key-status[data-kind="error"]{color:var(--danger)}
+#mode-warning{margin:10px 0 0}
 .plain{margin:0;padding-left:18px}
 .plain li{margin:4px 0}

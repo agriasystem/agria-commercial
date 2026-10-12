@@ -25,6 +25,7 @@ test('manifest MV3 completo', () => {
   assert.ok(Number(manifest.minimum_chrome_version) >= 116, 'setPanelBehavior richiede Chrome 116');
   assert.equal(manifest.side_panel.default_path, 'sidepanel/sidepanel.html');
   assert.equal(manifest.background.service_worker, 'background/service-worker.js');
+  assert.equal(manifest.background.type, 'module', 'il service worker importa il client HubSpot');
   assert.equal(manifest.options_page, 'options/options.html');
 });
 
@@ -38,7 +39,7 @@ test('ogni file citato dal manifest esiste', () => {
 
 test('permessi minimi, nessun content script fisso, nessuna risorsa esposta alle pagine', () => {
   assert.deepEqual([...manifest.permissions].sort(), ['scripting', 'sidePanel', 'storage']);
-  assert.deepEqual(manifest.host_permissions, ['http://*/*', 'https://*/*']);
+  assert.deepEqual(manifest.host_permissions, ['http://*/*', 'https://*/*', 'https://api.hubapi.com/*']);
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.web_accessible_resources, undefined);
   assert.equal(manifest.content_security_policy, undefined, 'si usa la CSP predefinita (più restrittiva)');
@@ -96,13 +97,15 @@ test('il content script legge soltanto: nessuna modifica alla pagina, nessuna re
   for (const re of forbidden) assert.ok(!re.test(src), `collector.js contiene ${re}`);
 });
 
-test('rete solo in lib/fetchPage.js: GET, senza cookie né referrer; niente codice dinamico o HTML da stringhe', () => {
+test('rete solo in lib/fetchPage.js (GET dei siti) e lib/hubspotClient.js (solo api.hubapi.com); niente codice dinamico o HTML da stringhe', () => {
   for (const file of JS) {
     const src = read(file);
-    if (file !== 'lib/fetchPage.js') {
+    if (file !== 'lib/fetchPage.js' && file !== 'lib/hubspotClient.js') {
       assert.ok(!/\b(fetch|XMLHttpRequest|WebSocket|sendBeacon|EventSource)\s*\(/.test(src), `${file}: chiamata di rete`);
+      assert.ok(!/\bmethod\s*:\s*['"](POST|PUT|PATCH|DELETE)/i.test(src), `${file}: richiesta che modifica dati`);
+      assert.ok(!/request\(\s*['"](POST|PUT|PATCH|DELETE)/.test(src), `${file}: richiesta che modifica dati`);
     }
-    assert.ok(!/\bmethod\s*:\s*['"](POST|PUT|PATCH|DELETE)/i.test(src), `${file}: richiesta che modifica dati`);
+    assert.ok(!/['"](PATCH|DELETE)['"]/.test(src), `${file}: nessuna modifica o cancellazione di record`);
     assert.ok(!/\beval\s*\(|new\s+Function\s*\(/.test(src), `${file}: codice dinamico`);
     assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src), `${file}: HTML da stringhe`);
   }
@@ -111,6 +114,40 @@ test('rete solo in lib/fetchPage.js: GET, senza cookie né referrer; niente codi
   assert.match(fetcher, /credentials: 'omit'/);
   assert.match(fetcher, /referrerPolicy: 'no-referrer'/);
   assert.ok(!/\bbody\s*:/.test(fetcher), 'nessun dato inviato');
+  // HubSpot: un solo indirizzo fisso, le sole scritture sono creazioni (POST) e l'associazione (PUT)
+  const hub = read('lib/hubspotClient.js');
+  assert.match(hub, /export const API_BASE = 'https:\/\/api\.hubapi\.com';/);
+  assert.equal((hub.match(/https?:\/\/[a-z0-9.-]+/gi) || []).filter((u) => u !== 'https://api.hubapi.com').length, 0, 'nessun altro host');
+  assert.deepEqual([...hub.matchAll(/request\('(POST|PUT)', `([^`]+)`/g)].map((m) => `${m[1]} ${m[2]}`), [
+    'POST ${OBJECTS}/${object}/search',
+    'POST ${OBJECTS}/companies',
+    'POST ${OBJECTS}/contacts',
+    'PUT ${OBJECTS}/contact/${from}/associations/default/company/${to}',
+  ]);
+  assert.match(hub, /credentials: 'omit'/);
+});
+
+test('la Service Key resta nel service worker: mai nel pannello, nelle Impostazioni o nei log', () => {
+  // la voce dello storage con la chiave esiste in un solo file
+  const holders = JS.filter((f) => read(f).includes('hubspotServiceKey'));
+  assert.deepEqual(holders, ['lib/hubspotService.js']);
+  const code = (file) => read(file).replace(/^\s*\/\/.*$/gm, ''); // senza le righe di commento
+  assert.ok(!/storage\.sync/.test(JS.map(code).join('\n')), 'mai chrome.storage.sync');
+  // pannello e Impostazioni non importano client o servizio HubSpot (lavorano con messaggi)
+  const pages = JS.filter((f) => f.startsWith('sidepanel/') || f.startsWith('options/'));
+  for (const file of pages) {
+    assert.ok(!/from '\.\.\/lib\/(hubspotClient|hubspotService|mockHubspotClient)\.js'/.test(read(file)), `${file}: importa il client HubSpot`);
+  }
+  // gli eventi di tutte le aree dello storage porterebbero la chiave al pannello: nessuno li ascolta
+  for (const file of JS) assert.ok(!/chrome\.storage\.(onChanged|local\.onChanged)/.test(code(file)), `${file}: ascolta chrome.storage.local`);
+  // nessun log nei file che toccano la chiave o le richieste HubSpot
+  for (const file of ['lib/hubspotClient.js', 'lib/hubspotService.js']) assert.ok(!/console\./.test(read(file)), `${file}: log`);
+  const sw = read('background/service-worker.js');
+  assert.ok(!/console\.(log|info|debug)/.test(sw));
+  assert.ok(!/console\.\w+\([^)]*(message|token|key|header)/i.test(sw.replace("err?.message || err", '')), 'il service worker non registra messaggi HubSpot');
+  // la chiave si salva solo dalle Impostazioni e il campo è una password
+  assert.match(read('options/options.html'), /<input id="service-key" type="password" autocomplete="off"/);
+  assert.match(read('background/service-worker.js'), /fromOptions: page === OPTIONS_PAGE/);
 });
 
 test("l'HTML scaricato si legge solo con DOMParser (documento inerte, mai inserito nella pagina)", () => {

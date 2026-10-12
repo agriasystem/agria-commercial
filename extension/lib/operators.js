@@ -43,9 +43,12 @@ export async function selectOperator(id, storage = chrome.storage.session) {
   return operator;
 }
 
-/** Avvisa quando il commerciale attivo cambia (anche da un altro pannello o dalle Impostazioni). */
+/**
+ * Avvisa quando il commerciale attivo cambia (anche da un altro pannello o dalle Impostazioni).
+ * Solo lo storage di sessione: gli eventi di chrome.storage.local (dove sta la Service Key) qui non arrivano.
+ */
 export function onOperatorChange(callback) {
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'session' && changes[KEY]) callback(operatorById(changes[KEY].newValue));
+  chrome.storage.session.onChanged.addListener((changes) => {
+    if (changes[KEY]) callback(operatorById(changes[KEY].newValue));
   });
 }

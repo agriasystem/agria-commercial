@@ -1,5 +1,6 @@
 // Pannello laterale di Agria Scout: scelta del commerciale, scansione del sito del prospect, form
-// Azienda e Contatto con le proprietà HubSpot, persone e dati rilevati, verifica HubSpot (MOCK).
+// Azienda e Contatto con le proprietà HubSpot, persone e dati rilevati, sezione HubSpot (verifica e
+// creazione, vedi hubspotPanel.js: passa sempre dal service worker, che custodisce la Service Key).
 // Senza un commerciale attivo nella sessione di Chrome il pannello mostra solo la sua scelta.
 
 import { analyzeSnapshot } from '../lib/parser.js';
@@ -13,10 +14,9 @@ import {
   restoreDraft, setLegalBasisConfirmed, usePerson,
 } from '../lib/draft.js';
 import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normalizeUrl } from '../lib/validation.js';
-import { loadConfig, MOCK_SCENARIOS, normalizeConfig, onConfigChange } from '../lib/config.js';
+import { loadConfig, normalizeConfig, onConfigChange } from '../lib/config.js';
 import { loadActiveOperator, onOperatorChange, OPERATORS, selectOperator } from '../lib/operators.js';
-import { createHubspotClient, HubspotError } from '../lib/hubspotClient.js';
-import { createMockHubspotClient } from '../lib/mockHubspotClient.js';
+import { createHubspotPanel } from './hubspotPanel.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
 import {
   allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
@@ -34,7 +34,8 @@ const CHECKS = {
 };
 const INPUT_MODE = { email: 'email', phone: 'tel', url: 'url', domain: 'url', linkedinProfile: 'url', linkedinCompany: 'url' };
 const IDLE_TEXT = 'Apri il sito di un prospect e premi «Scansione approfondita».';
-const STALE = { kind: 'warn', title: 'Verifica da ripetere', text: 'Dati o impostazioni sono cambiati durante la verifica.' };
+// campi dell'azienda usati nella ricerca dei doppioni: se cambiano, la verifica HubSpot va rifatta
+const DUPLICATE_KEYS = new Set(['name', 'domain', 'website', 'phone', 'email_aziendale_principale', 'email_aziendale_secondaria', 'city']);
 const SCAN_TIMEOUT_MS = 10000;
 
 const $ = (selector) => document.querySelector(selector);
@@ -44,8 +45,7 @@ let config = normalizeConfig(null);
 let operator = null; // commerciale attivo (operators.js): l'unica fonte di hubspot_owner_id
 let busy = ''; // '' | 'scan' | 'analyze'
 let scanController = null;
-let verifying = false;
-let dataVersion = 0; // cresce a ogni cambio di dati: una verifica partita prima non vale più
+let hub = null; // sezione HubSpot (hubspotPanel.js)
 let saveTimer = null;
 let clearTimer = null;
 
@@ -83,6 +83,7 @@ function buildForms() {
           draft = setLegalBasisConfirmed(draft, box2.checked);
           box2.checked = draft.legalBasisConfirmed;
           renderMeta('contact', prop);
+          hub.render();
           scheduleSave();
         });
         wrap.append(el('label', { class: 'confirm' }, box2, ' Confermo la base giuridica per questo contatto'));
@@ -174,8 +175,10 @@ function renderForms() {
 function renderPeople() {
   const cards = peopleCards(draft.site, draft.mainPerson, (key) => {
     draft = usePerson(draft, key);
+    hub.contactChanged();
     renderForms();
     renderPeople();
+    hub.render();
     scheduleSave();
   });
   $('#people-list').replaceChildren(...(cards.length ? cards : [el('p', { class: 'hint' }, 'Nessuna persona individuata finora.')]));
@@ -200,6 +203,7 @@ function renderAll() {
   renderForms();
   renderPeople();
   renderSiteData();
+  hub.render();
 }
 
 function onEdit(section, name, value) {
@@ -215,7 +219,9 @@ function afterEdit(section, name, { rerender = true } = {}) {
   if (name === 'settore_agria') renderField('company', PROPS.company.find((p) => p.name === 'tipo_struttura_hospitality'));
   renderField('company', PROPS.company.find((p) => p.name === 'hs_quick_context'));
   if (section === 'contact') renderReadiness();
-  if (section === 'company' && (name === 'domain' || name === 'name')) invalidateVerify();
+  if (section === 'company' && DUPLICATE_KEYS.has(name)) hub.dataChanged();
+  if (section === 'contact') hub.contactChanged();
+  hub.render(); // anteprima dei dati da scrivere
   scheduleSave();
 }
 
@@ -264,7 +270,7 @@ function setBusy(mode) {
 function addPage(findings) {
   const { draft: next, mode } = applyFindings(draft, findings);
   draft = next;
-  invalidateVerify();
+  hub.dataChanged();
   renderAll();
   scheduleSave();
   return mode;
@@ -358,70 +364,10 @@ function onClear() {
   }
   disarmClear();
   draft = refreshForms(emptyDraft());
-  invalidateVerify();
+  hub.dataChanged();
   renderAll();
   scheduleSave();
   setStatus('idle', IDLE_TEXT);
-}
-
-// ---------------------------------------------------------------------------------------------
-// HubSpot (MOCK)
-
-function hubspotClient() {
-  return config.hubspot.mode === 'mock' ? createMockHubspotClient(config.hubspot) : createHubspotClient(config);
-}
-
-function showVerify(result) {
-  const box = $('#verify-result');
-  if (!result) {
-    box.hidden = true;
-    box.replaceChildren();
-    delete box.dataset.kind;
-    return;
-  }
-  box.dataset.kind = result.kind;
-  box.replaceChildren(el('strong', {}, result.title), el('p', {}, result.text));
-  if (result.detail) box.append(el('p', {}, result.detail));
-  if (config.hubspot.mode === 'mock') box.append(el('p', { class: 'mocknote' }, 'Risposta simulata (MOCK): nessun dato letto o scritto su HubSpot.'));
-  box.hidden = false;
-}
-
-function invalidateVerify() {
-  dataVersion += 1;
-  showVerify(null);
-}
-
-async function onVerify() {
-  if (verifying || needsOperator()) return;
-  verifying = true;
-  const button = $('#verify');
-  button.disabled = true;
-  button.textContent = 'Verifica in corso…';
-  showVerify(null);
-  const version = dataVersion;
-  const query = { domain: draft.company.domain.value, name: draft.company.name.value };
-  try {
-    const res = await hubspotClient().findCompany(query);
-    if (version !== dataVersion) return showVerify(STALE);
-    if (res.found) {
-      const c = res.companies[0];
-      showVerify({ kind: 'found', title: 'Azienda già presente in HubSpot', text: [c.name, c.domain, `ID ${c.id}`].filter(Boolean).join(' · '), detail: 'Non creare un doppione: lavora sulla scheda esistente.' });
-    } else {
-      showVerify({ kind: 'not_found', title: 'Azienda non presente in HubSpot', text: `Nessuna azienda trovata per ${query.domain || query.name}.`, detail: 'La creazione in HubSpot arriverà in una fase successiva.' });
-    }
-  } catch (err) {
-    if (version !== dataVersion) return showVerify(STALE);
-    if (err instanceof HubspotError && err.code === 'invalid_input') showVerify({ kind: 'warn', title: 'Dati insufficienti', text: err.message });
-    else showVerify({ kind: 'error', title: 'Verifica non riuscita', text: err instanceof HubspotError ? err.message : `Errore imprevisto: ${err?.message || err}`, detail: 'Riprova tra poco.' });
-  } finally {
-    verifying = false;
-    button.disabled = false;
-    button.textContent = 'Verifica HubSpot';
-  }
-}
-
-function renderConfig() {
-  $('#mock-scenario').textContent = MOCK_SCENARIOS[config.hubspot.mockScenario];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -451,6 +397,7 @@ function applyOperator(next) {
   $('#active-name').textContent = operator?.name || '';
   for (const [section, props] of Object.entries(PROPS)) for (const prop of props) if (prop.input === 'owner') renderOwner(section, prop);
   showPicker(false);
+  hub.render(); // l'anteprima HubSpot mostra il nuovo proprietario
 }
 
 async function onPickOperator(id) {
@@ -476,22 +423,31 @@ async function init() {
   $('#deep-scan').addEventListener('click', onDeepScan);
   $('#analyze').addEventListener('click', onAnalyze);
   $('#clear').addEventListener('click', onClear);
-  $('#verify').addEventListener('click', onVerify);
   $('#open-settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
   $('#version').textContent = `v${chrome.runtime.getManifest().version}`;
 
+  hub = createHubspotPanel({
+    $,
+    getDraft: () => draft,
+    setDraft: (next) => {
+      draft = next;
+      scheduleSave();
+    },
+    getOperator: () => operator,
+    needsOperator,
+  });
   onConfigChange((next) => {
+    // un altro scenario MOCK o un'altra modalità: la verifica fatta prima non vale più
+    if (next.hubspot.mode !== config.hubspot.mode || next.hubspot.mockScenario !== config.hubspot.mockScenario) hub.dataChanged();
     config = next;
-    renderConfig();
-    invalidateVerify();
+    hub.refreshStatus();
   });
   onOperatorChange(applyOperator); // anche se lo sceglie un altro pannello di questa sessione
   try {
     config = await loadConfig();
   } catch (err) {
-    console.warn('[Agria Scout] impostazioni non lette, uso quelle predefinite:', err);
+    console.warn('[Agria Scout] impostazioni non lette, uso quelle predefinite:', err?.message || err);
   }
-  renderConfig();
   operator = await loadActiveOperator().catch((err) => {
     console.warn('[Agria Scout] commerciale attivo non letto:', err);
     return null;
@@ -499,6 +455,7 @@ async function init() {
 
   const saved = await chrome.storage.session.get('draft').catch(() => ({}));
   draft = refreshForms(restoreDraft(saved.draft));
+  await hub.init();
   renderAll();
   applyOperator(operator);
   if (draft.site.pages.length) setStatus('ok', "Dati ripresi dall'ultima analisi.", draft.site.notes);

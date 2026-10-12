@@ -10,9 +10,17 @@ import {
   loadActiveOperator, onOperatorChange, operatorById, OPERATORS, OperatorRequiredError, requireOperator, selectOperator,
 } from '../extension/lib/operators.js';
 
-// chrome.storage.session in memoria, con l'evento onChanged come in Chrome
+// chrome.storage.session in memoria, con il suo evento onChanged come in Chrome
+// (onOperatorChange ascolta solo lo storage di sessione: gli eventi di storage.local non gli arrivano)
 const listeners = [];
-globalThis.chrome = { storage: { onChanged: { addListener: (fn) => listeners.push(fn) } } };
+const localListeners = [];
+globalThis.chrome = {
+  storage: {
+    session: { onChanged: { addListener: (fn) => listeners.push(fn) } },
+    local: { onChanged: { addListener: (fn) => localListeners.push(fn) } },
+    onChanged: { addListener: () => assert.fail('nessun ascolto di tutte le aree dello storage') },
+  },
+};
 function sessionStorage() {
   const data = {};
   return {
@@ -21,7 +29,7 @@ function sessionStorage() {
     async set(obj) {
       const changes = Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, { oldValue: data[k], newValue: v }]));
       Object.assign(data, structuredClone(obj));
-      for (const fn of listeners) fn(changes, 'session');
+      for (const fn of listeners) fn(changes);
     },
   };
 }
@@ -77,8 +85,8 @@ test('cambio commerciale durante la sessione: tutti i pannelli lo ricevono, la b
   assert.deepEqual(seen, ['Matteo Garuzzo', 'Alessandro Poponi']);
   assert.deepEqual(await loadActiveOperator(session), ALESSANDRO);
   assert.equal(JSON.stringify(draft), before, 'il prospect resta com\'era: il proprietario non sta nella bozza');
-  // un evento di altre aree (Impostazioni in chrome.storage.local) non cambia il commerciale
-  for (const fn of listeners) fn({ activeOperator: { newValue: MATTEO.hubspotOwnerId } }, 'local');
+  // un evento di chrome.storage.local (Impostazioni, Service Key) non arriva nemmeno
+  assert.equal(localListeners.length, 0);
   assert.equal(seen.length, 2);
   draft = editField(draft, 'company', 'city', 'Montefalco');
   assert.equal(crmRecords(draft, await loadActiveOperator(session)).company.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);

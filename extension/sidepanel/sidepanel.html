@@ -11,7 +11,7 @@
 <body>
 <header class="top">
   <div class="brand"><span class="k">Agria System</span><h1 class="n">AGRIA SCOUT</h1></div>
-  <span class="badge mock" title="HubSpot è simulato: nessun dato viene letto o scritto su HubSpot">HubSpot MOCK</span>
+  <span class="badge mock" data-mode-badge title="HubSpot simulato: nessun dato viene letto o scritto su HubSpot">HubSpot MOCK</span>
   <button id="open-settings" class="tbtn" type="button">Impostazioni</button>
 </header>
 
@@ -76,11 +76,21 @@
     </details>
   </section>
 
-  <section class="card" aria-labelledby="hubspot-title">
-    <h2 id="hubspot-title" class="eyebrow">HubSpot <span class="badge mock">MOCK</span></h2>
-    <p class="hint">Simulazione: nessun dato viene letto o scritto su HubSpot. Scenario attivo: <strong id="mock-scenario">…</strong></p>
+  <section class="card hubspot" aria-labelledby="hubspot-title">
+    <h2 id="hubspot-title" class="eyebrow">HubSpot <span class="badge mock" data-mode-badge="short">MOCK</span></h2>
+    <ol class="steps" aria-label="Passaggi">
+      <li>Scansione</li><li>Verifica HubSpot</li><li>Creazione</li>
+    </ol>
+    <p id="hubspot-hint" class="hint"></p>
+    <p id="hubspot-blocker" class="ready" role="alert" hidden></p>
     <button id="verify" class="btn wide" type="button">Verifica HubSpot</button>
-    <div id="verify-result" class="result" role="status" hidden></div>
+    <div id="verify-result" class="result" role="status" aria-live="polite" hidden></div>
+    <div id="company-step" class="crm-step" aria-live="polite" hidden></div>
+    <div id="contact-step" class="crm-step" aria-live="polite" hidden></div>
+    <details id="audit-box" class="audit">
+      <summary>Registro HubSpot di questa sessione <span id="audit-count" class="count"></span></summary>
+      <ol id="audit-list" class="audit-list"></ol>
+    </details>
   </section>
   </div>
 

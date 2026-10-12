@@ -13,11 +13,14 @@ const memoryStorage = () => {
   };
 };
 
-test('configurazione: valori predefiniti, scenari validi, modalità reale non attivabile', () => {
+test('configurazione: valori predefiniti, scenari validi, modalità MOCK o reale', () => {
   assert.deepEqual(normalizeConfig(undefined), structuredClone(DEFAULT_CONFIG));
+  assert.equal(DEFAULT_CONFIG.hubspot.mode, 'mock', 'si parte in MOCK');
   assert.equal(normalizeConfig({ hubspot: { mockScenario: 'found' } }).hubspot.mockScenario, 'found');
   assert.equal(normalizeConfig({ hubspot: { mockScenario: 'boh' } }).hubspot.mockScenario, 'not_found');
-  assert.equal(normalizeConfig({ hubspot: { mode: 'real' } }).hubspot.mode, 'mock');
+  assert.equal(normalizeConfig({ hubspot: { mode: 'real' } }).hubspot.mode, 'real');
+  assert.equal(normalizeConfig({ hubspot: { mode: 'produzione' } }).hubspot.mode, 'mock');
+  assert.equal(normalizeConfig({ hubspot: { mode: 'real', serviceKey: 'non deve restare qui' } }).hubspot.serviceKey, undefined, 'nessuna credenziale nella configurazione');
   assert.equal(normalizeConfig({ hubspot: { mockDelayMs: -5 } }).hubspot.mockDelayMs, 700);
 });
 
@@ -42,7 +45,9 @@ test('impostazioni: salvataggio automatico di ogni campo, valori sbagliati non s
   };
   assert.equal(await autosave('maxPages', '40'), '');
   assert.equal(await autosave('mockScenario', 'found'), '');
-  assert.deepEqual((await loadConfig(storage)).hubspot, { ...DEFAULT_CONFIG.hubspot, mockScenario: 'found' });
+  assert.equal(await autosave('mode', 'real'), '');
+  assert.match(await autosave('mode', 'altro'), /non prevista/);
+  assert.deepEqual((await loadConfig(storage)).hubspot, { ...DEFAULT_CONFIG.hubspot, mockScenario: 'found', mode: 'real' });
   assert.equal((await loadConfig(storage)).scan.maxPages, 40);
   // un valore sbagliato spiega il motivo e lascia il valore salvato prima
   assert.match(await autosave('maxPages', '500'), /da 5 a 100/);
@@ -73,27 +78,34 @@ test('richiesta: serve un dominio valido o il nome', () => {
   assert.throws(() => validateCompanyQuery({ domain: 'non un dominio', name: 'La Mora' }), (e) => e.code === 'invalid_input');
 });
 
-test('mock: i tre scenari', async () => {
+test('mock: i tre scenari, stessa interfaccia del client reale', async () => {
   const q = { domain: 'lamora.it', name: 'Agriturismo La Mora' };
-  const absent = await createMockHubspotClient({ mockScenario: 'not_found', mockDelayMs: 0 }).findCompany(q);
-  assert.deepEqual(absent, { found: false, companies: [], mock: true });
+  const methods = ['testConnection', 'searchCompanyDuplicates', 'getCompany', 'createCompany', 'searchContactDuplicates', 'createContact', 'associateContactToCompany'];
+  const real = createHubspotClient({ getToken: async () => '' });
+  const mock = createMockHubspotClient({ mockDelayMs: 0 });
+  for (const m of methods) assert.equal(typeof real[m], 'function', `reale: ${m}`);
+  for (const m of methods) assert.equal(typeof mock[m], 'function', `mock: ${m}`);
 
-  const present = await createMockHubspotClient({ mockScenario: 'found', mockDelayMs: 0 }).findCompany(q);
-  assert.equal(present.found, true);
-  assert.equal(present.mock, true);
-  assert.deepEqual(present.companies[0], { id: 'MOCK-1001', name: 'Agriturismo La Mora', domain: 'lamora.it' });
+  const absent = await createMockHubspotClient({ mockScenario: 'not_found', mockDelayMs: 0 }).searchCompanyDuplicates(q);
+  assert.deepEqual(absent, { outcome: 'none', matches: [] });
+
+  const present = await createMockHubspotClient({ mockScenario: 'found', mockDelayMs: 0 }).searchCompanyDuplicates(q);
+  assert.equal(present.outcome, 'certain');
+  assert.deepEqual([present.matches[0].id, present.matches[0].name, present.matches[0].domain], ['MOCK-1001', 'Agriturismo La Mora', 'lamora.it']);
 
   await assert.rejects(
-    createMockHubspotClient({ mockScenario: 'error', mockDelayMs: 0 }).findCompany(q),
+    createMockHubspotClient({ mockScenario: 'error', mockDelayMs: 0 }).searchCompanyDuplicates(q),
     (e) => e instanceof HubspotError && e.code === 'mock_error',
   );
-  await assert.rejects(createMockHubspotClient({ mockDelayMs: 0 }).findCompany({}), (e) => e.code === 'invalid_input');
+  await assert.rejects(createMockHubspotClient({ mockDelayMs: 0 }).searchCompanyDuplicates({}), (e) => e.code === 'invalid_input');
   assert.throws(() => createMockHubspotClient({ mockScenario: 'boh' }));
   assert.deepEqual(Object.keys(MOCK_SCENARIOS), ['not_found', 'found', 'error']);
 });
 
-test('client reale: non attivo nella V0, nessuna chiamata', async () => {
-  const client = createHubspotClient();
+test('client reale: senza Service Key nessuna chiamata', async () => {
+  let calls = 0;
+  const client = createHubspotClient({ getToken: async () => '', fetchImpl: async () => { calls += 1; } });
   assert.equal(client.mode, 'real');
-  await assert.rejects(client.findCompany({ domain: 'lamora.it' }), (e) => e instanceof HubspotError && e.code === 'not_available');
+  await assert.rejects(client.searchCompanyDuplicates({ domain: 'lamora.it' }), (e) => e instanceof HubspotError && e.code === 'no_key');
+  assert.equal(calls, 0);
 });
