@@ -156,13 +156,23 @@
 </main>
 
 <!-- contatore di oggi del commerciale attivo (sidepanel/dailyCounter.js): Home, Scout, Outreach -->
-<footer id="daily-counter" class="daily" aria-label="Primi contatti di oggi" title="Aziende con il primo contatto registrato oggi. Correggi con − e + se hai contattato aziende fuori da Agria Commercial." hidden>
-  <span id="daily-label" class="daily-label">Oggi</span>
-  <button id="daily-minus" class="daily-btn" type="button" aria-label="Togli 1 dal conteggio di oggi">−</button>
-  <output id="daily-count" class="daily-count" aria-labelledby="daily-label" aria-live="polite">–</output>
-  <button id="daily-plus" class="daily-btn" type="button" aria-label="Aggiungi 1 al conteggio di oggi">+</button>
-  <span id="daily-target" class="daily-target">/ 20</span>
-  <span class="daily-note">aziende contattate</span>
+<footer id="daily-counter" class="daily" aria-label="Primi contatti di oggi" hidden>
+  <!-- cronologia di oggi: si apre sopra la riga del contatore, compatta, con «Chiudi» -->
+  <section id="daily-history" class="daily-history" aria-labelledby="daily-history-title" hidden>
+    <h2 id="daily-history-title" class="daily-history-title">Cronologia di oggi</h2>
+    <ol id="daily-history-list" class="daily-history-list"></ol>
+    <p id="daily-history-manual" class="daily-history-manual" hidden></p>
+    <button id="daily-history-close" class="btn ghost small" type="button">Chiudi</button>
+  </section>
+  <div class="daily-row" title="Aziende con il primo contatto registrato oggi. 20 è l'obiettivo, non un limite. Correggi con − e + se hai contattato aziende fuori da Agria Commercial.">
+    <span id="daily-label" class="daily-label">Oggi</span>
+    <button id="daily-minus" class="daily-btn" type="button" aria-label="Togli 1 dal conteggio di oggi">−</button>
+    <output id="daily-count" class="daily-count" aria-labelledby="daily-label" aria-live="polite">–</output>
+    <button id="daily-plus" class="daily-btn" type="button" aria-label="Aggiungi 1 al conteggio di oggi">+</button>
+    <span id="daily-target" class="daily-target">/ 20</span>
+    <span class="daily-note">aziende contattate</span>
+    <button id="daily-history-toggle" class="linkbtn daily-toggle" type="button" aria-expanded="false" aria-controls="daily-history">Vedi aziende contattate (0)</button>
+  </div>
 </footer>
 </body>
 </html>

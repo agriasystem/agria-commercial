@@ -172,6 +172,8 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     const res = await call('outreachConfirm', {
       companyId: p.companyId, sentConfirmed: true,
       recipient: { type: 'company', email: plan.to, cc: [...plan.cc] },
+      // solo per la cronologia di oggi: il Contatto HubSpot già noto (nessuna scrittura sul Contatto)
+      knownContact: p.contact ? { id: p.contact.id, name: p.contact.name, jobtitle: p.contact.jobtitle, url: p.contact.url } : null,
     });
     busy = '';
     if (!res.ok) error = res.error;

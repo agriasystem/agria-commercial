@@ -1234,6 +1234,9 @@ async function run(context, site, fake) {
   check('Gmail: nessun segnaposto', !/\{\{|\}\}/.test(gp.get('su') + gp.get('body')));
   equal('apertura di Gmail: nessuna scrittura in HubSpot', writes().length, writesBeforeGmail);
   equal('apertura di Gmail: contatore invariato', Number((await text('#daily-count')).trim()), countBeforeLaMora);
+  const historyLabel = async () => (await text('#daily-history-toggle')).trim();
+  const historyBeforeLaMora = await historyLabel();
+  equal('apertura di Gmail: nessuna voce di cronologia', historyBeforeLaMora, 'Vedi aziende contattate (1)');
   includes('dopo Gmail: istruzione', await text('#outreach-after-gmail'), 'Dopo averla inviata da Gmail, torna qui.');
   equal("dopo Gmail: azione primaria «Ho inviato l'email»", (await primaries('outreach')).join(), 'outreach-sent');
   await panel.click('#nav-home');
@@ -1314,6 +1317,46 @@ async function run(context, site, fake) {
   // Azienda ormai contattata, Contatto HubSpot senza data: nessuna registrazione parziale del Contatto
   check('Azienda contattata: nessun «Registra email inviata a Maria Bianchi»', !doneView.includes('Registra email inviata') && !doneView.includes('Hai scritto anche') && !(await panel.$('#outreach-contact-date')));
   equal('Azienda contattata: data del Contatto ancora vuota', contactRecord.properties.data_primo_invio_email_al_contatto, undefined);
+  console.log('\nCronologia di oggi (Alessandro): Aziende registrate davvero, link ai record HubSpot');
+  await panel.waitForFunction(() => document.querySelector('#daily-history-toggle').textContent.includes('(2)'), null, { timeout: 5000 }).catch(() => {});
+  equal('«Vedi aziende contattate (2)»', await historyLabel(), 'Vedi aziende contattate (2)');
+  check('cronologia chiusa all\'inizio', await panel.isHidden('#daily-history'));
+  await panel.click('#daily-history-toggle');
+  check('cronologia aperta', await panel.isVisible('#daily-history'));
+  equal('cronologia: titolo', (await text('#daily-history-title')).trim(), 'Cronologia di oggi');
+  const historyRows = await panel.$$eval('#daily-history-list .daily-entry', (li) => li.map((x) => ({
+    id: x.dataset.companyId, time: x.querySelector('.daily-time').textContent, company: x.querySelector('.daily-company').textContent.replace(' ↗', ''),
+    href: x.querySelector('a.daily-company')?.href || '', target: x.querySelector('a.daily-company')?.target || '',
+    contact: x.querySelector('.daily-contact')?.textContent.replace(' ↗', '') || '', contactHref: x.querySelector('a.daily-contact')?.href || '',
+  })));
+  equal('cronologia: la più recente in alto, solo Aziende registrate', JSON.stringify(historyRows.map((r) => [r.id, r.company])), JSON.stringify([[created.id, 'Agriturismo La Mora'], [existingCompany, 'Cantina Rossi']]));
+  const romeNow = (ms) => new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(ms);
+  check('cronologia: ora italiana della conferma', [romeNow(Date.now()), romeNow(Date.now() - 60000), romeNow(Date.now() - 120000)].includes(historyRows[0].time), historyRows[0].time);
+  equal('cronologia: link al record dell\'Azienda (dato da HubSpot)', historyRows[0].href, created.url);
+  equal('cronologia: il link apre una nuova scheda', historyRows[0].target, '_blank');
+  equal('cronologia: Contatto già noto sotto l\'Azienda', historyRows[0].contact, 'Maria Bianchi — Titolare');
+  equal('cronologia: link al record del Contatto', historyRows[0].contactHref, contactRecord.url);
+  equal('cronologia: Contatto trovato in HubSpot (Cantina Rossi)', historyRows[1].contact, 'Mario Rossi');
+  equal('cronologia: nessuna correzione a mano', await panel.isHidden('#daily-history-manual'), true);
+  const [recordTab] = await Promise.all([context.waitForEvent('page'), panel.click('#daily-history-list .daily-entry a.daily-company')]);
+  await recordTab.waitForLoadState('domcontentloaded').catch(() => {});
+  equal('clic sul nome: il record HubSpot in una nuova scheda', hubspotRecordsOpened.at(-1), created.url);
+  await recordTab.close();
+  await panel.bringToFront();
+  check('il pannello resta aperto', !panel.isClosed());
+  check('nessuna modifica al Contatto', fake.state.requests.filter((q) => q.method === 'PATCH').every((q) => !q.path.includes('/contacts/')));
+  await panel.setViewportSize({ width: 320, height: 900 });
+  check('cronologia aperta: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
+  await panel.screenshot({ path: path.join(OUT, '11-cronologia-di-oggi-320.png') });
+  await panel.setViewportSize({ width: 400, height: 900 });
+  check('cronologia aperta: nessuno scroll orizzontale (400 px)', await noHorizontalScroll());
+  await panel.click('#daily-history-close');
+  check('«Chiudi»: cronologia chiusa', await panel.isHidden('#daily-history'));
+  // riapertura del pannello: niente voci nuove
+  await panel.reload();
+  await panel.waitForSelector('#app:not([hidden])');
+  await panel.waitForFunction(() => document.querySelector('#daily-history-toggle').textContent.includes('('), null, { timeout: 5000 }).catch(() => {});
+  equal('riapertura del pannello: stessa cronologia', await historyLabel(), 'Vedi aziende contattate (2)');
   // Home: follow-up programmato; Home → Outreach → Scout → Home senza perdere nulla
   await panel.click('#nav-home');
   for (const part of ['Follow-up programmato', `Agriturismo La Mora: ${formatDue(expected.dueAt)} · ${ALESSANDRO.name}.`]) includes(`Home: ${part}`, await text('#next-step'), part);
@@ -1374,6 +1417,18 @@ async function run(context, site, fake) {
   await pressCounter('#daily-plus', 3);
   await pressCounter('#daily-minus', 2);
   equal('correzione a mano: +3 −1', await dailyCount(), 2);
+  equal('Matteo: cronologia sua (vuota), le Aziende di Alessandro non ci sono', (await text('#daily-history-toggle')).trim(), 'Vedi aziende contattate (0)');
+  await panel.click('#daily-history-toggle');
+  includes('cronologia vuota: nessuna Azienda inventata', await text('#daily-history-list'), 'Nessuna Azienda registrata oggi con Agria Commercial.');
+  equal('correzione a mano mostrata a parte', (await text('#daily-history-manual')).trim(), '+2 aggiunte manualmente');
+  await panel.click('#daily-history-close');
+  // 20 è un obiettivo, non un limite
+  for (let n = 3; n <= 21; n += 1) await pressCounter('#daily-plus', n);
+  equal('«+» oltre 20: 21 / 20', await dailyCount(), 21);
+  includes('obiettivo invariato', await text('#daily-target'), '/ 20');
+  check('«+» ancora attivo oltre 20', await panel.isEnabled('#daily-plus'));
+  for (let n = 20; n >= 2; n -= 1) await pressCounter('#daily-minus', n);
+  equal('di nuovo 2', await dailyCount(), 2);
   const stored = await panel.evaluate(() => chrome.storage.local.get('dailyOutreachCounts').then((r) => r.dailyOutreachCounts || {}));
   const today = Object.keys(stored[MATTEO.hubspotOwnerId] || {}).at(-1);
   equal('in chrome.storage.local per commerciale e giorno', stored[MATTEO.hubspotOwnerId]?.[today]?.count, 2);
@@ -1453,6 +1508,13 @@ async function newSession(context) {
   await panel.waitForFunction(() => document.querySelector('#daily-count').textContent.trim() !== '–', null, { timeout: 5000 }).catch(() => {});
   equal('nuova sessione: contatore di oggi conservato (chrome.storage.local)', (await panel.textContent('#daily-count')).trim(), '2');
   check('nuova sessione: contatore visibile', await panel.isVisible('#daily-counter'));
+  await panel.click('#daily-history-toggle');
+  equal('nuova sessione: correzione a mano conservata', (await panel.textContent('#daily-history-manual')).trim(), '+2 aggiunte manualmente');
+  await panel.click(`#change-operator`);
+  await panel.click(`#operator-list .operator[data-owner-id="${ALESSANDRO.hubspotOwnerId}"]`);
+  await panel.waitForFunction(() => document.querySelector('#daily-history-toggle').textContent.includes('(2)'), null, { timeout: 5000 }).catch(() => {});
+  equal('nuova sessione: cronologia di Alessandro conservata (chrome.storage.local)', (await panel.textContent('#daily-history-toggle')).trim(), 'Vedi aziende contattate (2)');
+  includes('nuova sessione: Aziende di Alessandro', await panel.textContent('#daily-history-list'), 'Agriturismo La Mora');
   check('nuova sessione: si riparte dalla Home', await panel.isVisible('#view-home') && await panel.isHidden('#view-scout'));
   check('nuova sessione: nessun errore JavaScript', errors.length === 0, errors.join(' | '));
 }
@@ -1461,6 +1523,15 @@ async function newSession(context) {
 // Gmail: nessuna richiesta esce verso Google. La scheda di composizione riceve una pagina finta e
 // l'e2e ne legge solo l'URL (destinatari, oggetto, testo, account).
 const gmailOpened = [];
+// link ai record HubSpot (cronologia di oggi): pagina finta, nessuna richiesta a hubspot.com
+const hubspotRecordsOpened = [];
+async function routeHubspotRecords(context) {
+  await context.route('https://*.hubspot.com/**', (route) => {
+    hubspotRecordsOpened.push(route.request().url());
+    return route.fulfill({ status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: '<!doctype html><title>HubSpot (finto)</title><p>Record finto</p>' });
+  });
+}
+
 async function routeGmail(context) {
   await context.route('https://mail.google.com/**', (route) => {
     gmailOpened.push(route.request().url());
@@ -1489,7 +1560,7 @@ async function main() {
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
       // api.hubapi.com e mail.google.com su 127.0.0.1: una richiesta non intercettata fallisce, non arriva fuori
-      '--host-resolver-rules=MAP *.test 127.0.0.1, MAP api.hubapi.com 127.0.0.1, MAP mail.google.com 127.0.0.1',
+      '--host-resolver-rules=MAP *.test 127.0.0.1, MAP api.hubapi.com 127.0.0.1, MAP mail.google.com 127.0.0.1, MAP *.hubspot.com 127.0.0.1',
       '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable',
     ],
   });
@@ -1498,6 +1569,7 @@ async function main() {
   try {
     await routeHubspot(context, fake);
     await routeGmail(context);
+    await routeHubspotRecords(context);
     await run(context, site, fake);
     await context.close();
     console.log('\nNuova sessione di Chrome (stesso profilo)');

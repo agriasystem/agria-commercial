@@ -15,7 +15,7 @@
 
 import { loadConfig } from './config.js';
 import { createHubspotClient, HubspotError, validateCompanyQuery } from './hubspotClient.js';
-import { companyKeys, contactKeys } from './hubspotDuplicates.js';
+import { companyKeys, contactKeys, safeRecordUrl } from './hubspotDuplicates.js';
 import { companyPayload, contactPayload, lostFields, PREFLIGHT_MESSAGE } from './hubspotPayload.js';
 import { createMockHubspotClient } from './mockHubspotClient.js';
 import { loadActiveOperator, operatorById, OperatorRequiredError } from './operators.js';
@@ -263,9 +263,14 @@ export function createHubspotService({
       op.steps.company = 'done';
       delete op.errors.company;
       await saveOperation(mode, op);
-      // contatore «Oggi»: +1 ora, una volta sola per Azienda e giorno, anche se poi il task fallisce.
-      // In MOCK nulla è registrato davvero: non conta.
-      if (!mock) await counter.record(op.ownerId, op.companyId, op.confirmedAt).catch(() => {});
+      // contatore «Oggi» e cronologia: +1 e una voce ora, una volta sola per Azienda (ID) e giorno, anche se
+      // poi il task fallisce. In MOCK nulla è registrato davvero: niente conteggio, niente voce.
+      if (!mock) {
+        await counter.record(op.ownerId, {
+          companyId: op.companyId, companyName: op.companyName, contactedAt: new Date(op.confirmedAt).toISOString(),
+          hubspotUrl: op.history?.companyUrl || '', contact: op.history?.contact || null,
+        }).catch(() => {});
+      }
       const dateNote = op.writes.companyDate ? 'data del primo invio registrata' : 'data del primo invio già presente, invariata';
       const ccNote = op.recipient.cc?.length ? ` · CC: ${op.recipient.cc.join(', ')}` : '';
       await audit({ operation: 'Primo contatto', company: op.companyName, recordId: op.companyId, outcome: `Lead Status: Primo contatto inviato · ${dateNote} · destinatario: ${op.recipient.label}${ccNote}`, mock });
@@ -526,7 +531,7 @@ export function createHubspotService({
      * poi Lead Status + date (solo se vuote) + un task di follow-up. A e CC confermati restano
      * nell'operazione e nel registro: in HubSpot non si scrive altro.
      */
-    async outreachConfirm({ companyId, recipient, sentConfirmed }) {
+    async outreachConfirm({ companyId, recipient, sentConfirmed, knownContact }) {
       const operator = await operatorOrFail(); // owner del follow-up: chi è attivo adesso
       const { api, mock } = await client();
       const mode = mock ? 'mock' : 'real';
@@ -558,6 +563,9 @@ export function createHubspotService({
           writes: plan.writes,
           steps: { company: 'running', contact: type === 'contact' ? (plan.contactProperties ? 'pending' : 'kept') : 'none', task: 'pending' },
           errors: {}, taskAttempts: 0, task: null,
+          // per la cronologia di oggi, senza altre chiamate: il link del record letto qui sopra e il Contatto
+          // HubSpot già noto al pannello (solo da mostrare: nessuna scrittura sul Contatto)
+          history: { companyUrl: company.url || '', contact: historyContact(knownContact) },
         };
         await saveOperation(mode, op);
         return runOperation(api, mode, op, mock);
@@ -661,4 +669,12 @@ export function createHubspotService({
 function contactSessionKeys(properties) {
   const k = contactKeys(properties);
   return [k.email && `email:${k.email}`, ...k.phones.map((p) => `phone:${p}`), k.linkedin && `linkedin:${k.linkedin}`].filter(Boolean);
+}
+
+// Contatto HubSpot già noto al pannello per la cronologia di oggi: solo ID, «Nome — Qualifica» e link
+// del record (se HubSpot l'ha dato). Nient'altro, e mai una scrittura sul Contatto.
+function historyContact(raw) {
+  const id = String(raw?.id ?? '');
+  if (!isId(id)) return null;
+  return { id, name: personLabel(String(raw.name || ''), String(raw.jobtitle || '')).slice(0, 160), url: safeRecordUrl(raw.url, id) };
 }

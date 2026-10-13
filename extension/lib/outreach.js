@@ -49,7 +49,7 @@ export function taskBody(contact = null) {
  * emails: le email aziendali utilizzabili (companyEmails: principale, secondaria e le altre trovate da
  * Scout); excluded: quelle trovate ma non suggerite, col motivo (PEC, privacy, fornitore…).
  * → { companyId, name, existing, leadStatus, url, emails: [{ kind, email }], excluded: [{ email, reason }],
- *     contact: { id, name, jobtitle, email } | null }
+ *     contact: { id, name, jobtitle, email, url } | null }
  */
 export function outreachProspect(draft, mode) {
   const st = hubspotState(draft, mode);
@@ -64,10 +64,10 @@ export function outreachProspect(draft, mode) {
   const email = (v) => (EMAIL_RE.test(str(v).toLowerCase()) ? str(v).toLowerCase() : '');
   let contact = null;
   if (st.contact?.id && (!st.contact.companyId || st.contact.companyId === target.id)) {
-    contact = { id: st.contact.id, name: str(st.contact.name), jobtitle: value('contact', 'jobtitle'), email: email(value('contact', 'email')) };
+    contact = { id: st.contact.id, name: str(st.contact.name), jobtitle: value('contact', 'jobtitle'), email: email(value('contact', 'email')), url: str(st.contact.url) };
   } else if (Array.isArray(st.contactMatches) && st.contactMatches.length === 1 && st.contactMatches[0].id) {
     const m = st.contactMatches[0];
-    contact = { id: m.id, name: str(m.name), jobtitle: str(m.jobtitle), email: email(m.email) };
+    contact = { id: m.id, name: str(m.name), jobtitle: str(m.jobtitle), email: email(m.email), url: str(m.url) };
   }
   return {
     companyId: target.id,
