@@ -101,7 +101,12 @@ pannello: «Commerciale attivo: {nome} · **Cambia**»; *Cambia* riapre la scelt
 **Impostazioni** (limite pagine della scansione, modalità HubSpot MOCK o reale, scenario MOCK): si
 salvano da sole mentre scrivi («✓ Salvato» accanto al campo), restano in questo browser
 (`chrome.storage.local`, mai sincronizzate) e mostrano i **Commerciali disponibili** con il loro
-Owner ID, in sola lettura. «← Torna ad Agria Commercial» chiude la pagina.
+Owner ID, in sola lettura. «← Torna ad Agria Commercial» riapre Agria Commercial nel pannello laterale
+(`chrome.sidePanel.open`, sul clic) e torna alla scheda da cui si erano aperte le Impostazioni, se c'è
+ancora (il pannello ne ricorda solo l'id, nella sessione). **Non chiude mai** la scheda né la finestra:
+fino alla 0.4.0 chiudeva la scheda, e se era l'unica della finestra Chrome chiudeva la finestra intera
+(`options/backToAgria.js`). Se il pannello non si può aprire (profilo gestito, versione di Chrome) la
+pagina resta aperta e dice di usare l'icona di Agria Commercial nella barra.
 
 ## Distribuzione interna: master e stable
 
@@ -270,14 +275,26 @@ passo propone **Vai al primo contatto · Apri Outreach**.
 
 1. **Aprendo Outreach** il service worker rilegge l'Azienda in HubSpot (Lead Status, data del primo
    invio) e, se c'è, il Contatto.
-2. **Destinatario prima email**: l'email aziendale (principale o secondaria) oppure il Contatto
-   HubSpot («Roberto Rossi — Titolare»). Il Contatto non è obbligatorio. Nessuna scelta predefinita.
-3. «**Invia ora la prima email dal tuo account aziendale.**» Agria Commercial non invia email, non
+2. **Destinatari prima email**: **Azienda** oppure il Contatto HubSpot («Roberto Rossi — Titolare»).
+   Il Contatto non è obbligatorio. Nessuna scelta predefinita.
+3. **A / CC.** Azienda → **A:** l'email aziendale principale; **CC:** la secondaria e le altre email
+   aziendali utilizzabili trovate da Scout (vedi *Email per Outreach*), senza doppioni. Ogni CC si toglie
+   con **Togli** (e si rimette con **Rimetti**); la scelta resta anche cambiando vista o riaprendo il
+   pannello (`outreachChoice` in `chrome.storage.session`). Senza altre email si vede solo A. Sotto,
+   «Non suggeriti: …» con il motivo (PEC, privacy, fornitore esterno…). Contatto → A: il Contatto (con la
+   sua email, se nota), nessun CC.
+4. «**Invia ora la prima email dal tuo account aziendale.**» Agria Commercial non invia email, non
    apre Gmail e non legge la posta.
-4. **Cosa succederà**: stato lead → Primo contatto inviato · data primo invio Azienda · data del
-   Contatto (solo se l'email è andata al Contatto) · follow-up per {giorno} alle 14:30 · assegnato al
-   commerciale attivo.
-5. **Conferma email inviata e crea follow-up** (l'unica azione primaria). Il service worker rilegge
+5. **Ho inviato l'email** (l'unica azione primaria): **nessuna scrittura**. Si apre la verifica
+   «**Verifica prima di registrare il contatto**» con A e CC esattamente come scelti, «Confermando,
+   Agria Commercial registrerà il primo contatto in HubSpot e programmerà il follow-up.», **Cosa
+   succederà** (stato lead → Primo contatto inviato · data primo invio Azienda · data del Contatto solo se
+   l'email è andata al Contatto · follow-up per {giorno} alle 14:30 · assegnato al commerciale attivo) e
+   la casella obbligatoria, sempre vuota all'apertura, «Confermo di aver realmente inviato l'email ai
+   destinatari indicati.». **Indietro** torna ai destinatari senza scrivere nulla. Agria Commercial non
+   può verificare che l'email sia davvero partita (nessuna integrazione Gmail): vale la conferma.
+6. **Conferma invio e crea follow-up** (attiva solo con la casella spuntata) è l'unico clic che scrive. Il
+   service worker rifiuta qualsiasi richiesta senza la conferma esplicita (`sentConfirmed`), rilegge
    l'Azienda; se nel frattempo risulta già contattata si ferma senza scrivere nulla. Altrimenti:
    - Azienda: `hs_lead_status` = `ATTEMPTED_TO_CONTACT` e `data_del_primo_invio_email` = ora, **solo
      se vuota** (una data già presente non si riscrive mai);
@@ -286,6 +303,9 @@ passo propone **Vai al primo contatto · Apri Outreach**.
      attivo al momento della conferma, note «Primo follow-up dopo email commerciale Agria System.»
      (più «Contatto: {nome} — {qualifica}» se l'email è andata al Contatto), associato all'Azienda
      (tipo 192) e, se serve, al Contatto (tipo 204).
+
+   A e CC confermati restano nell'operazione della sessione, nell'esito («Destinatario: …», «CC: …») e
+   nel registro HubSpot di questa sessione: **in HubSpot non si scrive altro** (nessuna proprietà per i CC).
 
 **Date.** Prima di scrivere si legge il tipo delle due proprietà nel portale: `datetime` → istante della
 conferma in millisecondi Unix; `date` → il giorno in Italia, `YYYY-MM-DD` (documentazione HubSpot
@@ -367,6 +387,10 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
 `email_aziendale_secondaria`, `hs_quick_context`, `settore_agria`, `tipo_struttura_hospitality`,
 `city`, `state` (regione), `country`, `linkedin_company_page`, `hubspot_owner_id`, `hs_lead_status`.
 
+`state` («Stato/regione» in HubSpot) è sempre la **regione** (Umbria, Toscana…), mai «Italia». Per un
+prospect italiano `country` **non si propone e non si scrive** (basta la regione); per un prospect estero
+resta il Paese scritto dal sito. Scritto a mano dal commerciale, si invia come sempre.
+
 **Contatto:** `email`, `firstname`, `lastname`, `jobtitle` (in interfaccia «Qualifica»), `phone`,
 `mobilephone`, `hs_linkedin_url`, `hubspot_owner_id`, `hs_legal_basis`.
 
@@ -375,6 +399,15 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
   Masseria · Resort indipendente · Hotel · Struttura con ristorante · Struttura con spa · Altro.
   Con un altro settore il campo è nascosto; se il commerciale sceglie Hospitality ricompare.
   Settore e tipo sono proposti dalle parole del sito e restano sempre *da verificare*.
+  **Servizi propri della struttura**: «Struttura con ristorante» quando il sito dà almeno **due prove di
+  tipo diverso** che il ristorante è suo — il servizio qualifica la struttura nel titolo («…, con
+  ristorante»), una sezione o pagina dello stesso sito («Il Ristorante», voce di menu, indirizzo
+  `/ristorante…`), come si usa («Prenota un tavolo», «Orari ristorante», sistema di prenotazione tavoli),
+  dati strutturati dell'azienda (Restaurant). Vince sul generico «Agriturismo», che resta tra le
+  alternative a un clic; i tipi specifici (Relais, Masseria, Boutique Hotel…) restano. Non contano un
+  ristorante vicino, i consigli sul territorio («Ristoranti nei dintorni»), un link a un altro sito o la
+  sola parola «ristorante» nel testo. Stessa regola per «Struttura con spa» (titolo «con spa», sezione
+  «La Spa», «I trattamenti»…); la proposta della spa dalle parole del sito resta com'era.
 - `hs_lead_status`: `NEW` («Da contattare») per un nuovo prospect.
 - `hubspot_owner_id`: **solo** il commerciale attivo della sessione, mai dedotto dal sito e mai
   salvato nella bozza del prospect: cambiando commerciale, Azienda e Contatto mostrano subito il
@@ -383,7 +416,16 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
   confermata; senza commerciale attivo si ferma con un errore.
 - `hs_legal_basis`: «Legitimate interest – prospect/lead», confermata per il singolo Contatto o
   come predefinita della sessione; senza conferma il Contatto non si crea e la proprietà non si invia.
-- Nome azienda: la ragione sociale non viene proposta (resta tra i dati legali rilevati).
+- Nome azienda: la ragione sociale non viene proposta (resta tra i dati legali rilevati). Fonti in
+  ordine: JSON-LD, `og:site_name`, intestazione della pagina uguale al dominio, titolo ripulito,
+  copyright. I descrittori generici si tolgono solo quando qualificano la struttura, mai con una
+  sostituzione globale (`cleanCompanyName` in `lib/parser.js`): la coda «, con ristorante», «con piscina
+  e spa», «, ristorante e camere» se resta un nome di almeno due parole («Agriturismo Il Cantico delle
+  Cicale, con ristorante» → «… Il Cantico delle Cicale»); il tipo in testa o in coda («Agriturismo …»,
+  «… Relais & Spa») solo se il sito scrive anche il nome senza il tipo (intestazioni, `og:site_name`,
+  JSON-LD) e mai quello completo → «Il Cantico delle Cicale». «Agriturismo La Mora», «Ristorante Da
+  Vittorio», «Locanda con Cucina» restano interi. Il nome com'era scritto resta un indizio per il tipo
+  di struttura.
 - Persone: un candidato che contiene parole del lessico privacy/legale (modalità, trattamento, dati
   personali, categorie, finalità, base giuridica, interessato, diritti, periodo di conservazione,
   protezione dei dati…) è il titolo di una sezione dell'informativa, non una persona: non compare tra
@@ -398,6 +440,16 @@ sommano; un sito diverso è un nuovo prospect. Una correzione a mano non viene m
   dell'esistenza di una persona; **personale** solo con la forma di un nome (nome@, nome.cognome@,
   iniziale.cognome@, cognome.nome@) o se contiene il nome di una persona rilevata vicina;
   **aziendale** per le altre caselle (es. agriturismolamora@gmail.com).
+- **Email per Outreach** (`companyEmails` in `lib/crmModel.js`): fonte strutturata calcolata dalla
+  bozza di Scout (tutte le email trovate, più principale e secondaria del form), normalizzate e senza
+  doppioni, ciascuna *utilizzabile* o *esclusa* col motivo; il Contesto rapido non si rilegge mai.
+  Sempre escluse: PEC, privacy/dpo/gdpr, noreply, webmaster/postmaster. La principale (A) è esclusa solo
+  se è del fornitore del sito. Secondaria e altre escluse anche se amministrative, legali o tecniche
+  (amministrazione@, fatture@, legale@, lavoraconnoi@…), di una persona, del fornitore del sito (email
+  accanto a «Sito realizzato da», «powered by»…) o di un dominio estraneo (una casella gratuita vale solo
+  se il nome richiama il prospect, es. agriturismoilpoggio@gmail.com). Un indirizzo corretto a mano nel
+  form vale come riconosciuto (restano solo le esclusioni fisse). Vive nella bozza della sessione: per
+  conservarlo oltre la sessione servirebbe una nuova proprietà HubSpot (non creata, da approvare).
 - `hs_quick_context`: informazioni operative trovate che non hanno un campo dedicato, in
   quest'ordine: **WHATSAPP**, **P.IVA**, **ULTERIORI EMAIL** (oltre principale e secondaria),
   **ULTERIORI TELEFONI** (non il principale, non il WhatsApp ripetuto), **POTENZIALI CONTATTI**
@@ -435,8 +487,18 @@ all'indirizzo principale manca la provincia, Scout la prende — con fonte ed ev
 indirizzo della stessa città o con lo stesso CAP, da «Città (PR)» per la stessa città, oppure
 dall'unica provincia citata da sola nel sito («(PG)», «Provincia di Perugia»); con province diverse
 non sceglie, e la sede legale in un'altra città non conta. Regione dalla tabella fissa province →
-regioni (`lib/italy.js`); paese «Italia» da provincia o regione italiane, oppure da «ITALY»/«Italy»/
-«ITALIA» scritto nel sito. Niente geocoding, servizi esterni o AI.
+regioni (`lib/italy.js`). Il paese Italia si riconosce (provincia o regione italiane, «ITALY» scritto
+nel sito) ma per un prospect italiano non si propone. Niente geocoding, servizi esterni o AI.
+
+**Comune dal CAP.** «Strada Eugubina 225 · Loc. Pieve Pagliaccia Bosco 06134 (PG)» non scrive il
+comune: la località non è il comune e la sola sigla «(PG)» non lo dice. Per i **CAP dei capoluoghi**
+(tabella fissa in `lib/italy.js`: blocchi che appartengono solo a quel comune, frazioni comprese, es.
+Perugia 06121–06135, Roma 00118–00199) il comune viene dal CAP, se coerente con la provincia scritta:
+→ Perugia, Umbria, con il metodo «comune dal CAP 06134 (PG); località indicata: Pieve Pagliaccia
+Bosco». Vale anche per «06134 Pieve Pagliaccia (PG)» e per il JSON-LD. Gli altri comuni hanno CAP propri
+non in tabella: si usa il comune scritto dal sito; se manca (es. «Loc. San Feliciano 06063 (PG)»)
+la città resta vuota e la regione si ricava comunque dalla provincia. CAP e provincia incoerenti: il CAP
+non decide.
 
 **Persone.** Oltre ai ruoli dell'elenco («Titolare», «Sommelier», «Host»…), anche ruoli scritti dal sito
 con parole proprie, in una scheda di contatto: «Export, vendite, acquisti, logistica: Giulio Brandelli
@@ -479,7 +541,7 @@ extension/                 ← la cartella da caricare in Chrome
   lib/siteData.js                dati accumulati e deduplicati tra le pagine, persone
   lib/crmModel.js                modello HubSpot, proposte, contesto rapido
   lib/draft.js                   bozza: form, correzioni a mano, scelta della persona
-  lib/validation.js · italy.js · names.js   controlli, province e regioni, nomi propri
+  lib/validation.js · italy.js · names.js   controlli, province e regioni, CAP dei capoluoghi, nomi propri
   lib/operators.js               registro dei commerciali e commerciale attivo della sessione
   lib/config.js                  impostazioni (modalità MOCK/reale, scenario, limite pagine)
   lib/hubspotService.js          operazioni HubSpot del service worker: chiave, verifica, creazione, registro
@@ -498,7 +560,7 @@ extension/                 ← la cartella da caricare in Chrome
   modules/navigator/app/         copia GENERATA del Navigatore (tools/sync-navigator.js): non modificare
   sidepanel/                     pannello laterale: Home, viste dei moduli e Scout (pageReader.js,
                                  render.js, hubspotPanel.js, sidepanel.js)
-  options/                       pagina Impostazioni
+  options/                       pagina Impostazioni; backToAgria.js: «← Torna ad Agria Commercial» (non chiude mai nulla)
   ui/agria.css                   stile Agria condiviso
   ui/dom.js · ui/feedback.js     costruzione del DOM senza HTML da stringhe; componente degli esiti
   icons/                         generate da tools/make-icons.js
@@ -515,8 +577,8 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo A (Scout), B (primo contatto), C (follow-up programmato), D (già contattata), Home, navigazione, la shell che ricorda solo la vista. `tests/outreach.test.js`: +2 giorni lavorativi da lunedì a domenica, 14:30 Europe/Rome, CET, CEST, cambio d'ora, piano del primo contatto (date vuote valorizzate, date presenti invariate, email all'Azienda senza Contatto, Lead Status, owner, task e associazioni), prospect dalla bozza. `tests/outreachFlow.test.js`: lo stesso nel service worker contro un HubSpot finto, più doppio clic, task fallito e nuovo tentativo, task creato con risposta persa, esito incerto sull'Azienda, proprietà del portale, Azienda già contattata, data del solo Contatto (azione interna, non esposta). `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. `tests/distribution.test.js` (Windows): gli script di distribuzione su repository temporanei in `.tmp/` con un remote finto locale — pubblicazione rifiutata con working tree sporco, senza origin, con un controllo fallito o con stable divergente; aggiornamento al commit stable giusto, già aggiornato, modifiche locali conservate, passaggio da un altro ramo, lanciatori `.cmd`. |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione; Outreach: email all'Azienda, email al Contatto, data scritta da un collega prima della conferma, task fallito e nuovo tentativo (un solo task), doppio clic, Azienda già contattata senza alcuna azione, Home → Outreach → Scout → Home e riapertura senza perdere nulla, MOCK. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo A (Scout), B (primo contatto), C (follow-up programmato), D (già contattata), Home, navigazione, la shell che ricorda solo la vista. `tests/outreach.test.js`: +2 giorni lavorativi da lunedì a domenica, 14:30 Europe/Rome, CET, CEST, cambio d'ora, piano del primo contatto (date vuote valorizzate, date presenti invariate, email all'Azienda senza Contatto, Lead Status, owner, task e associazioni), prospect dalla bozza. `tests/outreachFlow.test.js`: lo stesso nel service worker contro un HubSpot finto, più doppio clic, task fallito e nuovo tentativo, task creato con risposta persa, esito incerto sull'Azienda, proprietà del portale, Azienda già contattata, data del solo Contatto (azione interna, non esposta), conferma esplicita obbligatoria e destinatari A/CC registrati. `tests/settings.test.js`: «← Torna ad Agria Commercial» con API di Chrome finte (Impostazioni unica scheda della finestra, pannello non apribile, nessun `window.close`/`tabs.remove`/`windows.remove` nel codice). `tests/geo.test.js`: La Locanda dei Golosi (CAP 06134 + località + PG → Perugia, Umbria), sigla di provincia che non inventa il comune, `state` mai «Italia», `country` non scritto per un prospect italiano, prospect estero, regressioni Magione/Montefalco/Assisi. `tests/hospitality.test.js`: Il Cantico delle Cicale (nome senza «con ristorante», «Struttura con ristorante» da prove forti), nomi veri intatti, nessun falso positivo da ristorante vicino/territorio/link esterno, spa. `tests/outreachRecipients.test.js`: email aziendali per Outreach, A/CC, deduplica, PEC/privacy/tecniche/fornitori/domini estranei esclusi, CC tolti a mano, solo A. `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. `tests/distribution.test.js` (Windows): gli script di distribuzione su repository temporanei in `.tmp/` con un remote finto locale — pubblicazione rifiutata con working tree sporco, senza origin, con un controllo fallito o con stable divergente; aggiornamento al commit stable giusto, già aggiornato, modifiche locali conservate, passaggio da un altro ramo, lanciatori `.cmd`. |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione; Outreach: email all'Azienda (A, CC suggeriti ed esclusi, CC tolto e conservato cambiando vista, «Ho inviato l'email» senza scritture, verifica con casella vuota e conferma disattivata, «Indietro» senza scritture, destinatari verificati = registrati), email al Contatto, data scritta da un collega prima della conferma, task fallito e nuovo tentativo (un solo task), doppio clic, Azienda già contattata senza alcuna azione, Home → Outreach → Scout → Home e riapertura senza perdere nulla, MOCK. Casi reali 0.4.1: La Locanda dei Golosi (Perugia, Umbria, nessun paese), Il Cantico delle Cicale (nome e «Struttura con ristorante»). Impostazioni: «← Torna ad Agria Commercial» anche quando sono l'unica scheda della loro finestra (pagina e finestra restano aperte). Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 | `npm run navigator:check` | La copia del Navigatore è allineata al suo repository? (vedi *Navigatore*) |
 
@@ -571,6 +633,12 @@ Milestone 2), prima in sola lettura.
   Chrome. Dopo una chiusura completa di Chrome l'Azienda risulta «già contattata», che è vero, ma la
   data del follow-up si vede solo in HubSpot (la lettura dei task non è ancora implementata).
 - Outreach: le festività non sono considerate nel calcolo dei giorni lavorativi.
+- Outreach: Agria Commercial non può verificare che l'email sia davvero partita (nessuna integrazione
+  Gmail): la registrazione si basa sulla conferma esplicita del commerciale. A e CC restano solo nella
+  sessione (operazione e registro), non in HubSpot.
+- Comune dal CAP solo per i capoluoghi (tabella fissa): la frazione di un altro comune scritta senza il
+  comune («Loc. San Feliciano 06063 (PG)») lascia la città vuota, da completare a mano. Una tabella
+  completa dei CAP dei comuni (dati ISTAT/Poste) si potrà aggiungere in seguito.
 - Outreach: il Contatto si può scegliere come destinatario solo se Scout lo ha creato o trovato in
   HubSpot per questo prospect.
 - HubSpot: senza backend non c'è un lock tra commerciali (vedi *Concorrenza tra commerciali*).

@@ -31,7 +31,7 @@ function analyze(over, pageType = 'home') {
   return { findings, site, company, contact, c: v(company), p: v(contact), people: peopleOf(site), facts: (kind) => factsOf(site, kind) };
 }
 
-test('JSON-LD LocalBusiness: azienda completa, regione e paese dalla provincia', () => {
+test('JSON-LD LocalBusiness: azienda completa, regione dalla provincia, paese non proposto (prospect italiano)', () => {
   const r = analyze({
     url: 'https://www.agriturismolamora.it/camere',
     title: 'Home | Agriturismo La Mora',
@@ -52,7 +52,7 @@ test('JSON-LD LocalBusiness: azienda completa, regione e paese dalla provincia',
   assert.equal(r.facts('address')[0].value, 'Via delle Querce 14, 06081 Assisi (PG)');
   assert.equal(r.c.city, 'Assisi');
   assert.equal(r.c.state, 'Umbria');
-  assert.equal(r.c.country, 'Italia');
+  assert.equal(r.c.country, '');
   assert.equal(r.company.name.method, 'dati strutturati JSON-LD');
   assert.equal(r.company.name.reliability, 'high');
   assert.equal(r.company.state.method, 'dedotta dalla provincia (PG)');
@@ -219,8 +219,11 @@ test('regione per esteso, città in maiuscolo, regione dal capoluogo', () => {
   const b = analyze({ url: 'https://www.bottegasiena.it/', text: { footer: 'Bottega · Via di Città 1, 53100 Siena' } });
   assert.equal(b.facts('address')[0].value, 'Via di Città 1, 53100 Siena');
   assert.equal(b.c.state, 'Toscana');
-  assert.equal(b.company.state.method, 'dedotta dalla città (capoluogo di provincia)');
-  assert.equal(b.company.state.reliability, 'check');
+  assert.equal(b.company.state.method, 'dedotta dalla provincia (SI), dal CAP 53100');
+  assert.equal(b.company.state.reliability, 'high');
+  // CAP fuori dalla tabella dei capoluoghi (vecchio CAP generico): regione dal nome del capoluogo, da verificare
+  const c = analyze({ url: 'https://www.bottegaperugia.it/', text: { footer: 'Bottega · Via dei Priori 1, 06100 Perugia' } });
+  assert.deepEqual([c.c.city, c.c.state, c.company.state.method, c.company.state.reliability], ['Perugia', 'Umbria', 'dedotta dalla città (capoluogo di provincia)', 'check']);
 });
 
 test('indirizzo su due righe, meta og:site_name, email offuscata', () => {

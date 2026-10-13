@@ -73,9 +73,9 @@ const BERIOLI_CANTINA = analyzeSnapshot(snap(`${BERIOLI}/la-cantina/`, {
 const berioli = () => siteOf(BERIOLI_HOME, BERIOLI_CONTATTI, BERIOLI_CANTINA);
 const byName = (site) => Object.fromEntries(peopleOf(site).map((p) => [`${p.firstName} ${p.lastName}`, p]));
 
-test('Berioli: Magione + (PG) + ITALY → città Magione, regione Umbria, paese Italia', () => {
+test('Berioli: Magione + (PG) + ITALY → città Magione, regione Umbria; paese non scritto (prospect italiano)', () => {
   const company = values(proposeCompany(berioli()));
-  assert.deepEqual([company.name, company.city, company.state, company.country], ['Cantina Berioli', 'Magione', 'Umbria', 'Italia']);
+  assert.deepEqual([company.name, company.city, company.state, company.country], ['Cantina Berioli', 'Magione', 'Umbria', '']);
   assert.equal(company.phone, '+39 345 258 6604');
 });
 
@@ -199,19 +199,19 @@ test('Contesto rapido: potenziali contatti con i segnali importanti, senza punte
 
 test('PG → Umbria, Perugia (PG) → Umbria, Provincia di Perugia → Umbria', () => {
   const one = (page) => place(siteOf(analyzeSnapshot(snap('https://cantina.test/contatti', { page }), { pageType: 'contact' })));
-  assert.deepEqual(one('Via Roma 1, 06063 Magione (PG)'), { city: 'Magione', state: 'Umbria', country: 'Italia', stateMethod: 'dedotta dalla provincia (PG)', stateUrl: 'https://cantina.test/contatti' });
+  assert.deepEqual(one('Via Roma 1, 06063 Magione (PG)'), { city: 'Magione', state: 'Umbria', country: '', stateMethod: 'dedotta dalla provincia (PG)', stateUrl: 'https://cantina.test/contatti' });
   assert.equal(one('Strada delle Fratte 3, 06132 Perugia (PG)').state, 'Umbria');
   const named = one('Via Roma 1, 06063 Magione\nSiamo in provincia di Perugia, vicino al lago.');
-  assert.deepEqual([named.city, named.state, named.country], ['Magione', 'Umbria', 'Italia']);
+  assert.deepEqual([named.city, named.state, named.country], ['Magione', 'Umbria', '']);
   assert.match(named.stateMethod, /unica provincia indicata nel sito/);
 });
 
 test('ITALY / Italy / italy / ITALIA / Italia → Italia', () => {
   for (const v of ['ITALY', 'Italy', 'italy', 'ITALIA', 'Italia', ' it ']) assert.equal(normalizeCountry(v), 'Italia', v);
   assert.equal(normalizeCountry('Svizzera'), 'Svizzera');
-  // paese scritto da solo nel footer, senza provincia
+  // paese scritto da solo nel footer, senza provincia: riconosciuto, ma per un prospect italiano non si propone
   const site = siteOf(analyzeSnapshot(snap('https://cantina.test/', { page: 'Via Roma 1, 53024 Montalcino', footer: 'ITALY' }), { pageType: 'home' }));
-  assert.deepEqual([place(site).city, place(site).country], ['Montalcino', 'Italia']);
+  assert.deepEqual([place(site).city, place(site).country], ['Montalcino', '']);
 });
 
 test('località unita tra più pagine: Magione su una, (PG) su un\'altra, ITALY nel footer', () => {
@@ -220,7 +220,7 @@ test('località unita tra più pagine: Magione su una, (PG) su un\'altra, ITALY 
   const c = analyzeSnapshot(snap('https://cantina.test/', { page: 'Benvenuti', footer: 'ITALY' }), { pageType: 'home' });
   for (const pages of [[a, b, c], [c, b, a], [b, a, c]]) {
     const p = place(siteOf(...pages));
-    assert.deepEqual([p.city, p.state, p.country], ['Magione', 'Umbria', 'Italia']);
+    assert.deepEqual([p.city, p.state, p.country], ['Magione', 'Umbria', '']);
     assert.equal(p.stateUrl, 'https://cantina.test/dove-siamo', 'con la fonte del dato');
   }
 });
@@ -234,11 +234,11 @@ test('nessuna regione inventata: province diverse o sede legale altrove non deci
   assert.equal(place(siteOf(ambiguous)).state, '');
 });
 
-test('regressione: La Mora Assisi → Umbria → Italia; Perticaia Montefalco → Umbria → Italia', () => {
+test('regressione: La Mora Assisi → Umbria; Perticaia Montefalco → Umbria (nessun paese per un prospect italiano)', () => {
   const lamora = analyzeSnapshot(snap('https://www.lamora.it/', { page: 'Agriturismo La Mora\nVia Roma 1, 06081 Assisi (PG)\nTel. 075 8123456' }), { pageType: 'home' });
-  assert.deepEqual(Object.values(place(siteOf(lamora))).slice(0, 3), ['Assisi', 'Umbria', 'Italia']);
+  assert.deepEqual(Object.values(place(siteOf(lamora))).slice(0, 3), ['Assisi', 'Umbria', '']);
   const perticaia = analyzeSnapshot(snap('https://perticaia-caso.test/', { page: 'Perticaia', footer: 'Perticaia Società Agricola S.r.l. · Località Casale 1, 06036 Montefalco (PG)' }), { pageType: 'home' });
-  assert.deepEqual(Object.values(place(siteOf(perticaia))).slice(0, 3), ['Montefalco', 'Umbria', 'Italia']);
+  assert.deepEqual(Object.values(place(siteOf(perticaia))).slice(0, 3), ['Montefalco', 'Umbria', '']);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -250,11 +250,11 @@ function berioliDraft() {
   return applyFindings(draft, BERIOLI_CANTINA).draft;
 }
 
-test('state e country presenti nel modello → presenti nel payload; pre-flight superato', () => {
+test('state presente nel modello → presente nel payload; country non scritto per un prospect italiano; pre-flight superato', () => {
   const draft = berioliDraft();
   const { properties, errors } = companyPayload(crmRecords(draft, MATTEO).company, MATTEO);
   assert.deepEqual(errors, []);
-  assert.deepEqual([properties.city, properties.state, properties.country], ['Magione', 'Umbria', 'Italia']);
+  assert.deepEqual([properties.city, properties.state, properties.country], ['Magione', 'Umbria', undefined]);
   assert.deepEqual(preflightCompany(draft, MATTEO), { ok: true, missing: [], message: '' });
 });
 
@@ -263,7 +263,7 @@ test('payload incompleto → il pre-flight blocca la scrittura', () => {
   const lost = berioliDraft();
   Object.assign(lost.company.state, { value: '', edited: false });
   Object.assign(lost.company.country, { value: '', edited: false });
-  assert.deepEqual(preflightCompany(lost, MATTEO), { ok: false, missing: ['Regione', 'Paese'], message: 'Alcuni dati rilevati non sono stati trasferiti correttamente al modello HubSpot.' });
+  assert.deepEqual(preflightCompany(lost, MATTEO), { ok: false, missing: ['Regione'], message: 'Alcuni dati rilevati non sono stati trasferiti correttamente al modello HubSpot.' });
   // un payload che perde un dato del form
   const record = crmRecords(berioliDraft(), MATTEO).company;
   const { properties } = companyPayload(record, MATTEO);

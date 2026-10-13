@@ -120,10 +120,28 @@ test('Outreach, Azienda già contattata: nessuna azione «Registra email inviata
   assert.match(read('lib/hubspotService.js'), /async outreachContactDate\(\{ companyId, contactId \}\)/);
 });
 
-test('Outreach, Azienda non contattata: flusso normale invariato', () => {
+test('Outreach, Azienda non contattata: destinatari A/CC, «Ho inviato l\'email», verifica, conferma (Patch 0.4.1)', () => {
   const panel = read('modules/outreach/outreachPanel.js');
-  for (const text of ['Destinatario prima email', 'Invia ora la prima email dal tuo account aziendale.', 'Cosa succederà', 'Conferma email inviata e crea follow-up', 'Riprova creazione follow-up']) assert.ok(panel.includes(text), text);
+  for (const text of [
+    'Destinatari prima email', 'A:', 'CC:', 'Invia ora la prima email dal tuo account aziendale.', 'Ho inviato l\'email',
+    'Verifica prima di registrare il contatto', 'Confermando, Agria Commercial registrerà il primo contatto in HubSpot e programmerà il follow-up.',
+    'Confermo di aver realmente inviato l\'email ai destinatari indicati.', 'Conferma invio e crea follow-up', 'Indietro', 'Cosa succederà',
+    'Riprova creazione follow-up',
+  ]) assert.ok(panel.includes(text), text);
+  assert.ok(!panel.includes('Conferma email inviata e crea follow-up'), 'il vecchio pulsante a un clic non c\'è più');
   for (const action of ['outreachRead', 'outreachConfirm', 'outreachRetry']) assert.match(panel, new RegExp(`call\\('${action}'`), action);
+  // l'unica chiamata che scrive parte dal pulsante finale, con la conferma esplicita e i destinatari verificati
+  const code = panel.replace(/^\s*\/\/.*$/gm, '');
+  assert.equal([...code.matchAll(/call\('outreachConfirm'/g)].length, 1);
+  const confirm = code.slice(code.indexOf('async function onConfirm('), code.indexOf('async function onRetry('));
+  assert.match(confirm, /if \(!p \|\| !plan \|\| !sentChecked \|\| busy\) return;/);
+  assert.match(confirm, /sentConfirmed: true/);
+  assert.match(confirm, /recipient: \{ type: plan\.type, contactId: plan\.contactId, email: plan\.to, cc: \[\.\.\.plan\.cc\] \}/);
+  for (const fn of ['onSent', 'onBack']) {
+    const body = panel.match(new RegExp(String.raw`function ${fn}\(\) \{[\s\S]*?\r?\n  \}\r?\n`))?.[0] || '';
+    assert.ok(body.includes('pending'), `${fn}: corpo trovato`);
+    assert.ok(!/call\(|sendMessage/.test(body), `${fn}: nessuna chiamata al service worker`);
+  }
 });
 
 test('esiti: cinque toni fissi, ciascuno con un\'icona', () => {

@@ -201,7 +201,9 @@ test('Outreach con Azienda creata da Scout: dati dalla stessa bozza, destinatari
   const p = outreachProspect(draft, 'real');
   assert.deepEqual([p.companyId, p.name, p.existing, p.leadStatus, p.contact], ['9001', 'Cantina Rossi', false, 'NEW', null]);
   assert.deepEqual(p.emails.map((e) => e.email), ['info@cantinarossi.it', 'vendite@cantinarossi.it']);
-  assert.deepEqual(recipientOptions(p).map((o) => [o.type, o.label]), [['company', 'Azienda — info@cantinarossi.it'], ['company', 'Azienda — vendite@cantinarossi.it']]);
+  // una sola scelta «Azienda»: A = principale, CC = secondaria (Patch 0.4.1)
+  assert.deepEqual(recipientOptions(p).map((o) => [o.type, o.label, o.to, o.cc]), [['company', 'Azienda — info@cantinarossi.it', 'info@cantinarossi.it', ['vendite@cantinarossi.it']]]);
+  assert.deepEqual(p.excluded, [{ email: 'roberto.rossi@cantinarossi.it', reason: 'email di una persona' }], 'l\'email di Roberto non va in copia all\'Azienda');
   assert.equal(outreachProspect(draft, 'mock'), null, 'ogni modalità HubSpot ha il suo prospect');
 });
 
@@ -210,11 +212,14 @@ test('Outreach con Azienda già presente (doppione certo) e Contatto HubSpot: de
   draft = updateHubspot(draft, 'real', { contact: { id: '888', name: 'Roberto Rossi', companyId: '777', associated: true, url: '', createdAt: '' } });
   const p = outreachProspect(draft, 'real');
   assert.deepEqual([p.companyId, p.name, p.existing, p.leadStatus], ['777', 'Cantina Rossi Srl', true, 'CONNECTED']);
-  assert.deepEqual(p.contact, { id: '888', name: 'Roberto Rossi', jobtitle: 'Titolare' });
-  assert.deepEqual(recipientOptions(p).at(-1), { key: 'contact:888', type: 'contact', contactId: '888', label: 'Roberto Rossi — Titolare' });
+  assert.deepEqual(p.contact, { id: '888', name: 'Roberto Rossi', jobtitle: 'Titolare', email: 'roberto.rossi@cantinarossi.it' });
+  assert.deepEqual(recipientOptions(p).at(-1), {
+    key: 'contact:888', type: 'contact', contactId: '888', email: 'roberto.rossi@cantinarossi.it', label: 'Roberto Rossi — Titolare',
+    to: 'roberto.rossi@cantinarossi.it', cc: [],
+  });
   // contatto già presente in HubSpot (trovato da Scout): vale come Contatto HubSpot valido
   const existing = updateHubspot(updateHubspot(draft, 'real', { contact: null }), 'real', { contactMatches: [{ id: '999', name: 'Roberto Rossi', jobtitle: 'Enologo' }] });
-  assert.deepEqual(outreachProspect(existing, 'real').contact, { id: '999', name: 'Roberto Rossi', jobtitle: 'Enologo' });
+  assert.deepEqual(outreachProspect(existing, 'real').contact, { id: '999', name: 'Roberto Rossi', jobtitle: 'Enologo', email: '' });
   // più contatti trovati: nessuno scelto in automatico
   const many = updateHubspot(existing, 'real', { contactMatches: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }] });
   assert.equal(outreachProspect(many, 'real').contact, null);

@@ -21,7 +21,7 @@ import { loadActiveOperator, operatorById, OperatorRequiredError } from './opera
 import { COMPANY_PROPS, CONTACT_PROPS, LEAD_STATUS } from './crmModel.js';
 import { AUDIT_ITEM } from './hubspotMessages.js';
 import {
-  CONTACT_DATE, COMPANY_DATE, DATE_TYPES, FIRST_CONTACT_STATUS, LEAD_STATUS_PROP, dateValue, isAlreadyContacted, personLabel, planFirstContact,
+  CONTACT_DATE, COMPANY_DATE, DATE_TYPES, FIRST_CONTACT_STATUS, LEAD_STATUS_PROP, cleanCc, dateValue, isAlreadyContacted, personLabel, planFirstContact,
   remainingCompanyProperties, sameDateValue,
 } from './outreach.js';
 import { formatDue } from './outreachTime.js';
@@ -47,7 +47,8 @@ export const MESSAGES = Object.freeze({
   outreachUnknown: 'Azienda non verificata in questa sessione: torna a Scout e premi «Verifica HubSpot».',
   outreachNoOperation: 'Nessuna operazione da riprendere: apri di nuovo Outreach.',
   alreadyContacted: 'Questa Azienda risulta già contattata.',
-  notContacted: "Questa Azienda non risulta ancora contattata: usa «Conferma email inviata e crea follow-up».",
+  notContacted: "Questa Azienda non risulta ancora contattata: usa «Ho inviato l'email» in Outreach.",
+  sentNotConfirmed: "Conferma di aver realmente inviato l'email ai destinatari indicati: nulla è stato registrato.",
 });
 
 const COMPANY_FIELD_NAMES = new Set(COMPANY_PROPS.map((p) => p.name));
@@ -79,7 +80,8 @@ const knownCompany = (state, id) => Object.values(state.companies).some((c) => c
 function publicOperation(op) {
   if (!op) return null;
   return {
-    companyId: op.companyId, companyName: op.companyName, recipient: { type: op.recipient.type, label: op.recipient.label },
+    companyId: op.companyId, companyName: op.companyName,
+    recipient: { type: op.recipient.type, label: op.recipient.label, to: op.recipient.to || '', cc: [...(op.recipient.cc || [])] },
     ownerId: op.ownerId, ownerName: op.ownerName, confirmedAt: op.confirmedAt, dueAt: op.dueAt,
     steps: { ...op.steps }, errors: { ...op.errors }, taskId: op.task?.id || '', writes: { ...op.writes }, complete: isComplete(op),
   };
@@ -259,7 +261,8 @@ export function createHubspotService({
       delete op.errors.company;
       await saveOperation(mode, op);
       const dateNote = op.writes.companyDate ? 'data del primo invio registrata' : 'data del primo invio già presente, invariata';
-      await audit({ operation: 'Primo contatto', company: op.companyName, recordId: op.companyId, outcome: `Lead Status: Primo contatto inviato · ${dateNote} · destinatario: ${op.recipient.label}`, mock });
+      const ccNote = op.recipient.cc?.length ? ` · CC: ${op.recipient.cc.join(', ')}` : '';
+      await audit({ operation: 'Primo contatto', company: op.companyName, recordId: op.companyId, outcome: `Lead Status: Primo contatto inviato · ${dateNote} · destinatario: ${op.recipient.label}${ccNote}`, mock });
     }
     // 2. Contatto (solo se la prima email è andata al Contatto)
     if (['pending', 'uncertain', 'error'].includes(op.steps.contact)) {
@@ -511,10 +514,13 @@ export function createHubspotService({
     },
 
     /**
-     * «Conferma email inviata e crea follow-up». Una sola volta per Azienda: rilegge l'Azienda, si ferma
-     * se risulta già contattata, poi Lead Status + date (solo se vuote) + un task di follow-up.
+     * «Conferma invio e crea follow-up» (secondo passo di Outreach, dopo «Ho inviato l'email» e la
+     * verifica dei destinatari). Senza la conferma esplicita del commerciale (sentConfirmed) non si
+     * scrive nulla. Una sola volta per Azienda: rilegge l'Azienda, si ferma se risulta già contattata,
+     * poi Lead Status + date (solo se vuote) + un task di follow-up. A e CC confermati restano
+     * nell'operazione e nel registro: in HubSpot non si scrive altro.
      */
-    async outreachConfirm({ companyId, recipient }) {
+    async outreachConfirm({ companyId, recipient, sentConfirmed }) {
       const operator = await operatorOrFail(); // owner del follow-up: chi è attivo adesso
       const { api, mock } = await client();
       const mode = mock ? 'mock' : 'real';
@@ -522,6 +528,9 @@ export function createHubspotService({
       const type = recipient?.type === 'contact' ? 'contact' : recipient?.type === 'company' ? 'company' : '';
       const contactId = type === 'contact' ? String(recipient?.contactId ?? '') : '';
       if (!type || (type === 'contact' && !isId(contactId))) throw new HubspotError('invalid_input', 'Scegli a chi hai inviato la prima email.');
+      if (sentConfirmed !== true) throw new HubspotError('invalid_input', MESSAGES.sentNotConfirmed);
+      const to = cleanCc([recipient?.email])[0] || '';
+      const cc = cleanCc(recipient?.cc, to);
 
       return lock(`outreach:${mode}:${id}`, async () => {
         const existing = (await readSession(mode)).outreach[id];
@@ -537,7 +546,7 @@ export function createHubspotService({
         const plan = planFirstContact({ company, contact, recipient: { type, contactId }, owner: operator, now: confirmedAt, types });
         const op = {
           companyId: id, companyName: plan.companyName || company.name,
-          recipient: { type, contactId, label: type === 'contact' ? personLabel(contact.name || 'Contatto', contact.jobtitle) : `Azienda${typeof recipient?.email === 'string' && recipient.email ? ` — ${recipient.email.slice(0, 200)}` : ''}` },
+          recipient: { type, contactId, label: type === 'contact' ? personLabel(contact.name || 'Contatto', contact.jobtitle) : `Azienda${to ? ` — ${to}` : ''}`, to, cc },
           ownerId: operator.hubspotOwnerId, ownerName: operator.name, confirmedAt, dueAt: plan.dueAt,
           plan: { company: plan.companyProperties, contact: plan.contactProperties, task: plan.task },
           writes: plan.writes,

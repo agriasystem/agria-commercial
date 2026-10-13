@@ -10,7 +10,7 @@
 //   POST /crm/objects/2026-09/contacts                                creazione contatto
 //   PUT  /crm/objects/2026-09/contact/{contactId}/associations/default/company/{companyId}
 //                                                                     associazione predefinita Contatto → Azienda
-// Outreach (primo contatto e follow-up, solo dopo «Conferma email inviata»):
+// Outreach (primo contatto e follow-up, solo dopo «Conferma invio e crea follow-up»):
 //   GET  /crm/objects/2026-09/{companies|contacts}/{id}?properties=…  lettura di stato e date di primo invio
 //   GET  /crm/properties/2026-09/{companies|contacts}/{nome}           tipo della proprietà (date o datetime)
 //   PATCH /crm/objects/2026-09/{companies|contacts}/{id}              SOLO le proprietà in UPDATABLE

@@ -3,7 +3,7 @@
 // P.IVA, codice fiscale, REA e PEC. Ogni valore viene dal testo o dai link: nessuna deduzione
 // diversa da quelle dichiarate nella fonte.
 
-import { cleanText, isValidCodiceFiscale, isValidPartitaIva, normalizeLinkedin, normKey, snippet } from './validation.js';
+import { cleanText, domainFromUrl, isValidCodiceFiscale, isValidPartitaIva, normalizeLinkedin, normKey, sameSite, snippet } from './validation.js';
 import { isProvinceCode } from './italy.js';
 
 export const METHOD = {
@@ -218,7 +218,7 @@ function countTerms(text, weight, cap, into) {
   for (const [term, n] of Object.entries(local)) into[term] = (into[term] || 0) + Math.min(n, cap) * weight;
 }
 
-/** Parole di settore pesate: { termine: punteggio }. */
+/** Parole di settore pesate: { termine: punteggio }, più le prove dei servizi propri (ownServiceSignals). */
 export function collectSignals(ctx) {
   const signals = {};
   countTerms(ctx.title, 5, 3, signals);
@@ -226,7 +226,56 @@ export function collectSignals(ctx) {
   countTerms(ctx.meta.description || '', 3, 3, signals);
   countTerms(ctx.text.page, 1, PER_TERM_BODY_CAP, signals);
   for (const n of ctx.ld) for (const t of n.types) if (SCHEMA_SIGNALS[t]) signals[SCHEMA_SIGNALS[t]] = (signals[SCHEMA_SIGNALS[t]] || 0) + 10;
+  Object.assign(signals, ownServiceSignals(ctx));
   return signals;
+}
+
+// ---------------------------------------------------------------------------------------------
+// servizi PROPRI della struttura (ristorante, spa): solo prove che il sito parla dei suoi servizi.
+// Un ristorante vicino, i consigli sul territorio, un link a un altro sito o una parola qualsiasi
+// nel testo non contano. Ogni prova vale 1 per pagina: { 'proprio:ristorante:titolo': 1, … }.
+//   titolo   il servizio qualifica la struttura nel titolo: «…, con ristorante», «Hotel & Spa»
+//   sezione  una sezione o pagina dello stesso sito: intestazione o voce di menu «Il Ristorante»,
+//            indirizzo /ristorante/
+//   uso      come si usa: «Prenota un tavolo», «Orari ristorante», sistema di prenotazione tavoli;
+//            «I trattamenti», «Prenota la spa»
+//   schema   dati strutturati dell'azienda: Restaurant, DaySpa… (non di un'altra organizzazione)
+
+const OWN_SERVICES = {
+  ristorante: {
+    title: /(?:\bcon\b|&|\+|\be\b)\s+(?:il\s+(?:nostro\s+)?|un\s+)?(?:ristorante|restaurant)(?![\p{L}])|(?:^|[|–—-]\s*|,\s*)(?:ristorante|restaurant)\s+(?:e|&|con)\s+(?:camere|rooms|alloggio|ospitalità)(?![\p{L}])/iu,
+    section: /^(?:il\s+|nostro\s+|il\s+nostro\s+)?(?:ristorante|restaurant)(?:\s+(?:e|&)\s+(?:bar|enoteca|cantina|pizzeria))?$/iu,
+    path: /\/(?:il-)?(?:ristorante|restaurant)(?:[-/]|$)/i,
+    use: /^(?:prenota(?:re|zione)?\s+(?:(?:un|il\s+(?:tuo|vostro))\s+)?tavolo|prenotazione\s+(?:del\s+)?tavolo|riserva\s+(?:un\s+)?tavolo|book\s+a\s+table|orari\s+(?:del\s+)?ristorante|men[uù]\s+del\s+ristorante)(?:\s*[!.:]?)$/iu,
+    schema: new Set(['Restaurant', 'FoodEstablishment']),
+    systemCategory: 'Prenotazione ristorante',
+  },
+  spa: {
+    title: /(?:\bcon\b|&|\+|\be\b)\s+(?:(?:la|una)\s+)?(?:spa|centro\s+benessere|wellness)(?![\p{L}])/iu,
+    section: /^(?:la\s+|la\s+nostra\s+|il\s+|il\s+nostro\s+)?(?:spa|centro\s+benessere|area\s+benessere|wellness|beauty\s+farm)(?:\s+(?:&|e)\s+(?:wellness|beauty|benessere))?$/iu,
+    path: /\/(?:la-)?(?:spa|wellness|benessere|centro-benessere)(?:[-/]|$)/i,
+    use: /^(?:i\s+(?:nostri\s+)?trattamenti|trattamenti(?:\s+benessere)?|massaggi|percorso\s+benessere|prenota\s+(?:la\s+spa|un\s+trattamento|un\s+massaggio))(?:\s*[!.:]?)$/iu,
+    schema: new Set(['DaySpa', 'HealthAndBeautyBusiness']),
+    systemCategory: '',
+  },
+};
+
+function ownServiceSignals(ctx) {
+  const out = {};
+  const label = (s) => cleanText(String(s || ''), 80).replace(/[“”"«»]/g, '').trim();
+  const ownLinks = ctx.links.filter((l) => l.kind === 'web' && sameSite(domainFromUrl(String(l.href || '')), ctx.domain));
+  const headings = [...ctx.headings, ...ctx.subheadings].map(label);
+  const top = ctx.orgs[0];
+  for (const [service, rule] of Object.entries(OWN_SERVICES)) {
+    const proof = (kind) => { out[`proprio:${service}:${kind}`] = 1; };
+    if (rule.title.test(ctx.title)) proof('titolo');
+    if (headings.some((h) => rule.section.test(h))
+      || ownLinks.some((l) => rule.section.test(label(l.text || l.label)) || rule.path.test(new URL(l.href).pathname))) proof('sezione');
+    if ([...headings, ...ctx.links.map((l) => label(l.text || l.label))].some((t) => rule.use.test(t))
+      || (rule.systemCategory && ctx.links.some((l) => systemOf(String(l.href || ''))?.category === rule.systemCategory))) proof('uso');
+    if (top && top.score > 0 && top.types.some((t) => rule.schema.has(t))) proof('schema');
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------

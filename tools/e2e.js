@@ -62,6 +62,12 @@ const SITES = {
     '/contatti/': 'caso-berioli-contatti.html', '/contatti': 'caso-berioli-contatti.html',
     '/la-cantina/': 'caso-berioli-la-cantina.html', '/la-cantina': 'caso-berioli-la-cantina.html',
   },
+  // Patch 0.4.1: comune dal CAP (Loc. … 06134 (PG)), nome senza «con ristorante», ristorante proprio
+  'lalocandadeigolosi.test': { '/': 'caso-locanda-home.html' },
+  'ilcanticodellecicale.test': {
+    '/': 'caso-cicale-home.html',
+    '/ristorante-in-agriturismo/': 'caso-cicale-ristorante.html', '/ristorante-in-agriturismo': 'caso-cicale-ristorante.html',
+  },
 };
 const [MATTEO, ALESSANDRO] = OPERATORS;
 // chiavi finte: il finto HubSpot accetta solo FAKE_KEY
@@ -276,7 +282,7 @@ async function run(context, site, fake) {
   await panel.waitForSelector('#outreach-empty');
   equal('Outreach senza prospect', (await text('#outreach-empty')).trim(), 'Nessun prospect pronto per il primo contatto.');
   equal('Outreach senza prospect: «Vai a Scout»', (await text('#outreach-to-scout')).trim(), 'Vai a Scout');
-  check('Outreach senza prospect: niente da confermare', !(await panel.$('#outreach-confirm')));
+  check('Outreach senza prospect: niente da confermare', !(await panel.$('#outreach-confirm')) && !(await panel.$('#outreach-sent')));
   check('Outreach: nessuno scroll orizzontale', await noHorizontalScroll());
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '9c-outreach.png') });
   await panel.focus('#nav-home');
@@ -364,7 +370,7 @@ async function run(context, site, fake) {
   equal('telefono (non fax)', await value('company-phone'), '+39 0758123456');
   equal('città', await value('company-city'), 'Assisi');
   equal('regione (state)', await value('company-state'), 'Umbria');
-  equal('paese', await value('company-country'), 'Italia');
+  equal('paese: non proposto per un prospect italiano', await value('company-country'), '');
   equal('lead status: etichetta, non il codice tecnico', (await text('#company-hs_lead_status')).trim(), 'Da contattare');
   check('etichette dei campi senza nomi tecnici HubSpot', !(await text('label[for="company-hs_lead_status"]')).includes('hs_lead_status'));
   includes('fonte e affidabilità mostrate', await text('#company-name-meta'), 'Alta affidabilità');
@@ -540,6 +546,14 @@ async function run(context, site, fake) {
   }, null, { timeout: 15000 });
   const recipients = () => panel.$$eval('#outreach-recipient .choice', (l) => l.map((x) => x.textContent.trim()));
   const primaries = (view) => panel.$$eval(`#view-${view} .btn.primary`, (b) => b.filter((x) => x.offsetParent).map((x) => x.id));
+  // Outreach in due passi (Patch 0.4.1): «Ho inviato l'email» → verifica → casella → conferma finale
+  const sendAndConfirm = async () => {
+    await panel.click('#outreach-sent');
+    await panel.waitForSelector('#outreach-verify');
+    await panel.check('#outreach-sent-check');
+    await panel.click('#outreach-confirm');
+  };
+  const outreachButtons = () => panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id).filter(Boolean));
   let v = await verify();
   check('pulsante disattivato durante la verifica (niente doppio invio)', v.disabled);
   equal('scenario "non presente"', v.kind, 'not_found');
@@ -561,7 +575,7 @@ async function run(context, site, fake) {
   await panel.click('#scout-next-step-action');
   await waitRead();
   await panel.locator('#outreach-recipient .choice').first().click();
-  await panel.click('#outreach-confirm');
+  await sendAndConfirm();
   await panel.waitForSelector('#outreach-follow-up', { timeout: 15000 });
   const mockOutreach = await text('#outreach-body');
   includes('MOCK: primo contatto simulato', mockOutreach, 'Primo contatto registrato');
@@ -667,7 +681,7 @@ async function run(context, site, fake) {
   equal('nome azienda', await value('company-name'), 'Cantina Berioli');
   equal('città', await value('company-city'), 'Magione');
   equal('regione (da «(PG)»)', await value('company-state'), 'Umbria');
-  equal('paese (da «ITALY»)', await value('company-country'), 'Italia');
+  equal('paese: «ITALY» riconosciuto ma non proposto (prospect italiano)', await value('company-country'), '');
   equal('telefono azienda', await value('company-phone'), '+39 345 258 6604');
   const cards = await panel.$$eval('#people-list .person', (list) => list.map((c) => c.innerText));
   equal('persone in ordine di rilevanza', JSON.stringify(cards.map((c) => c.split('\n')[0].split(' — ')[0])), JSON.stringify(['Roberto Berioli', 'Giulio Brandelli', 'Irene Rossi']));
@@ -693,7 +707,8 @@ async function run(context, site, fake) {
   v = await verify();
   equal('verifica (MOCK): non presente', v.kind, 'not_found');
   const berioliPreview = await text('#company-step');
-  for (const part of ['Città', 'Magione', 'Regione', 'Umbria', 'Paese', 'Italia']) includes(`anteprima: ${part}`, berioliPreview, part);
+  for (const part of ['Città', 'Magione', 'Regione', 'Umbria']) includes(`anteprima: ${part}`, berioliPreview, part);
+  check('anteprima: nessun paese per un prospect italiano', !berioliPreview.includes('Paese') && !berioliPreview.includes('Italia'), berioliPreview);
   check('pre-flight superato: nessun blocco', !(await panel.$('#preflight-error')) && await panel.isEnabled('#create-company'));
   // scelta manuale: Irene, con lo stesso numero dell'azienda
   await usePersonCard('Irene Rossi');
@@ -704,6 +719,34 @@ async function run(context, site, fake) {
   equal('nuova scansione: Irene resta il Contatto scelto', await value('contact-firstname'), 'Irene');
   includes('il suggerimento resta su Roberto', await panel.$eval('#people-list .person', (c) => c.innerText), 'Contatto suggerito');
   await panel.locator('section:has(#people-list)').screenshot({ path: path.join(OUT, '8-berioli-persone.png') });
+
+  console.log('\nPatch 0.4.1 — La Locanda dei Golosi: CAP + località + (PG), nessun comune scritto');
+  const locanda = await openTab(site('lalocandadeigolosi.test', '/'));
+  r = await analyze(locanda);
+  equal('analisi completata', r.state, 'ok');
+  equal('città dal CAP 06134 (non dalla sola sigla PG)', await value('company-city'), 'Perugia');
+  includes('città: metodo dichiarato', await text('#company-city-meta'), 'comune dal CAP 06134 (PG); località indicata: Pieve Pagliaccia Bosco');
+  equal('regione (state) = Umbria', await value('company-state'), 'Umbria');
+  equal('paese non scritto (prospect italiano)', await value('company-country'), '');
+  v = await verify();
+  const locandaPreview = await text('#company-step');
+  for (const part of ['Città', 'Perugia', 'Regione', 'Umbria']) includes(`anteprima Locanda: ${part}`, locandaPreview, part);
+  check('anteprima Locanda: «Italia» mai come regione o paese', !locandaPreview.includes('Italia'), locandaPreview);
+
+  console.log('\nPatch 0.4.1 — Il Cantico delle Cicale: nome senza descrittori, ristorante proprio');
+  const cicale = await openTab(site('ilcanticodellecicale.test', '/'));
+  r = await deepScan(cicale);
+  equal('scansione completata', r.state, 'ok');
+  equal('nome azienda: «Il Cantico delle Cicale»', await value('company-name'), 'Il Cantico delle Cicale');
+  check('«con ristorante» non entra nel nome né nelle alternative', !(await text('#company-name-field')).includes('con ristorante'));
+  equal('settore', await value('company-settore_agria'), 'Hospitality');
+  equal('tipo struttura: ristorante proprio prima di «Agriturismo»', await value('company-tipo_struttura_hospitality'), 'Struttura con ristorante');
+  includes('tipo struttura: prove mostrate', await text('#company-tipo_struttura_hospitality-meta'), '«con ristorante» nel titolo');
+  includes('«Agriturismo» a un clic', await text('#company-tipo_struttura_hospitality-field'), 'Agriturismo');
+  equal('città', await value('company-city'), 'Perugia');
+  equal('regione', await value('company-state'), 'Umbria');
+  equal('email principale (non la PEC)', await value('company-email_aziendale_principale'), 'info@ilcanticodellecicale.test');
+  await shot('3b-caso-cicale');
 
   console.log('\nCaso reale Perticaia: alias funzionali, cantina, informativa privacy, contatto inserito a mano');
   const perticaia = await openTab(site('perticaia-caso.test', '/'));
@@ -829,20 +872,20 @@ async function run(context, site, fake) {
   await waitRead();
   includes('Outreach: Azienda', await text('#outreach-facts'), 'Perticaia');
   equal('Outreach: stato letto da HubSpot', (await text('#outreach-status')).trim(), 'Da contattare');
-  check('nessun destinatario scelto in partenza: conferma disattivata', await panel.isDisabled('#outreach-confirm'));
+  check("nessun destinatario scelto in partenza: «Ho inviato l'email» disattivato", await panel.isDisabled('#outreach-sent'));
   await panel.locator('#outreach-recipient .choice').first().click();
-  check('destinatario scelto: conferma attiva', await panel.isEnabled('#outreach-confirm'));
+  check("destinatario scelto: «Ho inviato l'email» attivo", await panel.isEnabled('#outreach-sent'));
   const colleagueRecord = fake.state.companies.find((c) => c.id === colleague).properties;
   colleagueRecord.data_del_primo_invio_email = '2026-10-12T07:00:00.000Z'; // il collega registra il suo invio
   const writesBeforeColleague = writes().length;
-  await panel.click('#outreach-confirm');
+  await sendAndConfirm();
   await panel.waitForSelector('#outreach-contacted', { timeout: 15000 });
   const colleagueView = await text('#outreach-contacted');
   for (const part of ['Questa Azienda risulta già contattata.', '12/10/2026, 09:00']) includes(`rilettura prima di scrivere: ${part}`, colleagueView, part);
   equal('data del collega non sovrascritta', colleagueRecord.data_del_primo_invio_email, '2026-10-12T07:00:00.000Z');
   equal('nessuna scrittura, nessun task', writes().length, writesBeforeColleague);
-  check('nessun pulsante di conferma', !(await panel.$('#outreach-confirm')));
-  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-refresh');
+  check('nessun pulsante di conferma', !(await panel.$('#outreach-confirm')) && !(await panel.$('#outreach-sent')));
+  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await outreachButtons()).join(), 'outreach-refresh');
   await panel.click('#nav-scout');
 
   console.log('\nHubSpot REALE: gravità dei doppioni (La Mora, dominio diverso)');
@@ -902,9 +945,9 @@ async function run(context, site, fake) {
   for (const part of ['Questa Azienda risulta già contattata.', 'Stato attuale', 'Primo contatto inviato', 'Data primo invio', 'Non registrata', 'Nessun nuovo primo contatto e nessun follow-up automatico.']) {
     includes(`già contattata: ${part}`, alreadyView, part);
   }
-  check('già contattata: nessun «Conferma email inviata»', !(await panel.$('#outreach-confirm')));
+  check("già contattata: nessun «Ho inviato l'email» né conferma", !(await panel.$('#outreach-confirm')) && !(await panel.$('#outreach-sent')));
   check('già contattata: nessun «Registra email inviata…»', !(await panel.$('#outreach-contact-date')) && !(await text('#outreach-body')).includes('Registra email inviata'));
-  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-refresh');
+  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await outreachButtons()).join(), 'outreach-refresh');
   check('già contattata: nessun codice tecnico', !alreadyView.includes('ATTEMPTED_TO_CONTACT'));
   equal('già contattata: nessuna scrittura', writes().length, writesBeforeHard);
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10c-outreach-gia-contattata.png') });
@@ -960,10 +1003,16 @@ async function run(context, site, fake) {
   const cantinaRecipients = await recipients();
   check('destinatari: Azienda e Contatto HubSpot', cantinaRecipients.some((r) => r.startsWith('Azienda — ')) && cantinaRecipients.includes('Mario Rossi'), JSON.stringify(cantinaRecipients));
   await panel.locator('#outreach-recipient .choice', { hasText: 'Mario Rossi' }).click();
-  includes('anteprima: data del Contatto', await text('#outreach-preview'), 'Registra data primo invio al Contatto');
+  includes('Contatto: A = Mario Rossi con la sua email', await text('#outreach-recipients'), 'Mario Rossi · mario.rossi@cantinarossi.test');
+  includes('Contatto: nessun CC suggerito', await text('#outreach-recipients'), 'Nessuno');
   fake.force('POST', /\/tasks$/, fake.response.error(502, 'Bad gateway'), 1, { after: true }); // task creato, risposta persa
   const patchesBeforeCantina = patchCount();
   const tasksBeforeCantina = taskCount();
+  await panel.click('#outreach-sent');
+  await panel.waitForSelector('#outreach-verify');
+  includes('anteprima: data del Contatto', await text('#outreach-preview'), 'Registra data primo invio al Contatto');
+  equal('«Ho inviato l\'email» non scrive nulla', patchCount() + taskCount(), patchesBeforeCantina + tasksBeforeCantina);
+  await panel.check('#outreach-sent-check');
   await panel.click('#outreach-confirm');
   await panel.waitForSelector('#outreach-retry', { timeout: 15000 });
   const partialOutreach = await text('#outreach-body');
@@ -1071,18 +1120,65 @@ async function run(context, site, fake) {
   await panel.keyboard.press('Space');
   check('tastiera: destinatario scelto', await panel.isChecked('#outreach-r0'));
   const expected = followUpSchedule(Date.now());
-  const outreachPreview = await text('#outreach-preview');
-  for (const part of ['Cosa succederà', 'Stato lead → Primo contatto inviato', 'Registra data primo invio Azienda', `Crea follow-up per ${formatDue(expected.dueAt)}`, `Assegna a ${ALESSANDRO.name}`]) includes(`anteprima: ${part}`, outreachPreview, part);
-  check('email all\'Azienda: nessuna data del Contatto in anteprima', !outreachPreview.includes('Contatto'));
+  // A e CC: principale in A; secondaria e altre email aziendali idonee in CC; PEC, agenzia web e persona escluse
+  const shownRecipients = await text('#outreach-recipients');
+  includes('A: email aziendale principale', shownRecipients, 'A:info@agriturismo-lamora.test');
+  for (const cc of ['prenotazioni@agriturismo-lamora.test', 'eventi@agriturismo-lamora.test']) includes(`CC suggerito: ${cc}`, shownRecipients, cc);
+  for (const out of ['lamora@pec.agriturismo-lamora.test', 'info@webagency.test', 'maria.bianchi@agriturismo-lamora.test']) check(`non in CC: ${out}`, !shownRecipients.includes(out), shownRecipients);
+  const excludedNote = await text('#outreach-excluded');
+  for (const part of ['PEC', 'fornitore esterno', 'email di una persona']) includes(`non suggeriti, col motivo: ${part}`, excludedNote, part);
   check('anteprima senza codici HubSpot', !/ATTEMPTED_TO_CONTACT|hs_|data_del_primo/.test(await text('#outreach-body')));
-  equal('una sola azione primaria: la conferma', (await primaries('outreach')).join(), 'outreach-confirm');
-  equal('Azienda non contattata: flusso normale (destinatario, conferma, aggiorna)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-confirm,outreach-refresh');
+  equal("una sola azione primaria: «Ho inviato l'email»", (await primaries('outreach')).join(), 'outreach-sent');
+  equal('Azienda non contattata: «Ho inviato l\'email» e «Aggiorna da HubSpot»', (await outreachButtons()).join(), 'outreach-sent,outreach-refresh');
   check('Azienda non contattata: nessun «Registra email inviata…»', !(await panel.$('#outreach-contact-date')));
-  equal('azione primaria', (await text('#outreach-confirm')).trim(), 'Conferma email inviata e crea follow-up');
+  equal('azione primaria', (await text('#outreach-sent')).trim(), "Ho inviato l'email");
+  check('nessun «Conferma» prima del primo passo', !(await panel.$('#outreach-confirm')));
+  // CC tolto a mano: resta tolto anche cambiando vista
+  await panel.click('button[aria-label="Togli eventi@agriturismo-lamora.test dal CC"]');
+  includes('CC tolto: tra i «Tolti dal CC»', await text('#outreach-recipients'), 'Tolti dal CC:eventi@agriturismo-lamora.test');
+  await panel.click('#nav-home');
+  await panel.click('#nav-outreach');
+  await waitRead();
+  check('cambio di vista: destinatario e CC tolto conservati', await panel.isChecked('#outreach-r0') && (await text('#outreach-recipients')).includes('Tolti dal CC:eventi@agriturismo-lamora.test'));
   await panel.setViewportSize({ width: 320, height: 900 });
   check('Outreach: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10-outreach-primo-contatto.png') });
   await panel.setViewportSize({ width: 400, height: 900 });
+  check('Outreach: nessuno scroll orizzontale (400 px)', await noHorizontalScroll());
+  // primo clic: nessuna scrittura, solo la verifica
+  const writesBeforeLaMora = writes().length;
+  await panel.click('#outreach-sent');
+  await panel.waitForSelector('#outreach-verify');
+  equal("«Ho inviato l'email»: nessuna scrittura in HubSpot", writes().length, writesBeforeLaMora);
+  equal('verifica: titolo', (await text('#outreach-verify-title')).trim(), 'Verifica prima di registrare il contatto');
+  equal('verifica: il focus va al titolo', await panel.evaluate(() => document.activeElement?.id), 'outreach-verify-title');
+  const verifyText = await text('#outreach-verify');
+  for (const part of ['A:info@agriturismo-lamora.test', 'CC:prenotazioni@agriturismo-lamora.test', 'Confermando, Agria Commercial registrerà il primo contatto in HubSpot e programmerà il follow-up.', "Confermo di aver realmente inviato l'email ai destinatari indicati."]) includes(`verifica: ${part}`, verifyText, part);
+  check('verifica: il CC tolto non c\'è', !verifyText.includes('eventi@'));
+  const outreachPreview = await text('#outreach-preview');
+  for (const part of ['Cosa succederà', 'Stato lead → Primo contatto inviato', 'Registra data primo invio Azienda', `Crea follow-up per ${formatDue(expected.dueAt)}`, `Assegna a ${ALESSANDRO.name}`]) includes(`anteprima: ${part}`, outreachPreview, part);
+  check('email all\'Azienda: nessuna data del Contatto in anteprima', !outreachPreview.includes('Contatto'));
+  check('casella vuota all\'apertura', !(await panel.isChecked('#outreach-sent-check')));
+  check('casella vuota: conferma finale disattivata', await panel.isDisabled('#outreach-confirm'));
+  equal('conferma finale: testo', (await text('#outreach-confirm')).trim(), 'Conferma invio e crea follow-up');
+  equal('verifica: una sola azione primaria', (await primaries('outreach')).join(), 'outreach-confirm');
+  await panel.$eval('#outreach-confirm', (b) => b.click()); // clic forzato sul pulsante disattivato
+  equal('casella vuota: nessuna scrittura', writes().length, writesBeforeLaMora);
+  await panel.setViewportSize({ width: 320, height: 900 });
+  check('verifica: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10e-outreach-verifica.png') });
+  await panel.setViewportSize({ width: 400, height: 900 });
+  // «Indietro»: nessuna scrittura, si torna ai destinatari con le scelte di prima
+  await panel.click('#outreach-back');
+  await panel.waitForSelector('#outreach-sent');
+  equal('«Indietro»: nessuna scrittura', writes().length, writesBeforeLaMora);
+  check('«Indietro»: scelte conservate', await panel.isChecked('#outreach-r0') && (await text('#outreach-recipients')).includes('Tolti dal CC:eventi@agriturismo-lamora.test'));
+  await panel.click('#outreach-sent');
+  await panel.waitForSelector('#outreach-verify');
+  check('di nuovo la verifica: casella ancora vuota', !(await panel.isChecked('#outreach-sent-check')));
+  await panel.check('#outreach-sent-check');
+  check('casella spuntata: conferma finale attiva', await panel.isEnabled('#outreach-confirm'));
+  const verifiedRecipients = await text('#outreach-verify-recipients');
   const patchesBeforeLaMora = fake.state.requests.filter((q) => q.method === 'PATCH').length;
   const tasksBeforeLaMora = fake.state.requests.filter((q) => q.method === 'POST' && q.path === '/crm/objects/2026-09/tasks').length;
   await panel.evaluate(() => {
@@ -1107,7 +1203,13 @@ async function run(context, site, fake) {
   equal('task: owner', laMoraTask.properties.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);
   equal('task: associato solo all\'Azienda', fake.state.taskLinks.filter((l) => l.taskId === laMoraTask.id).map((l) => `${l.kind}:${l.typeId}`).join(), 'companies:192');
   const doneView = await text('#outreach-body');
-  for (const part of ['✓ Primo contatto registrato', 'Stato lead: Primo contatto inviato', 'Data primo invio Azienda: ', 'Destinatario: Azienda — info@agriturismo-lamora.test', '✓ Follow-up programmato', `${formatDue(expected.dueAt)} · assegnato a ${ALESSANDRO.name}`]) includes(`esito: ${part}`, doneView, part);
+  for (const part of ['✓ Primo contatto registrato', 'Stato lead: Primo contatto inviato', 'Data primo invio Azienda: ', 'Destinatario: Azienda — info@agriturismo-lamora.test', 'CC: prenotazioni@agriturismo-lamora.test', '✓ Follow-up programmato', `${formatDue(expected.dueAt)} · assegnato a ${ALESSANDRO.name}`]) includes(`esito: ${part}`, doneView, part);
+  // destinatari mostrati nella verifica = destinatari registrati dall'operazione
+  const recorded = await panel.evaluate((id) => chrome.storage.session.get('hubspotSession').then((r) => r.hubspotSession.real.outreach[id].recipient), created.id);
+  equal('registrati: A', recorded.to, 'info@agriturismo-lamora.test');
+  equal('registrati: CC (senza quello tolto)', JSON.stringify(recorded.cc), JSON.stringify(['prenotazioni@agriturismo-lamora.test']));
+  equal('verifica = registrazione', verifiedRecipients.replace(/\s+/g, ''), `A:${recorded.to}CC:${recorded.cc.join('')}`);
+  check('HubSpot: nessuna proprietà per i CC', fake.state.requests.filter((q) => q.method === 'PATCH').slice(-1).every((q) => !JSON.stringify(q.body).includes('prenotazioni@')));
   check('il focus passa all\'esito', await panel.evaluate(() => document.activeElement?.classList.contains('fb')));
   equal('esito annunciato ai lettori di schermo', (await text('#outreach-live')).trim(), `Primo contatto registrato. Follow-up programmato per ${formatDue(expected.dueAt)}.`);
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10b-outreach-follow-up.png') });
@@ -1159,10 +1261,52 @@ async function run(context, site, fake) {
   check('nuovo commerciale: base da confermare di nuovo', !(await panel.isChecked('#session-legal-basis')));
   equal('nessuna conferma in sessione', await panel.evaluate(() => chrome.storage.session.get('legalBasisDefault').then((r) => r.legalBasisDefault ?? null)), null);
 
-  console.log('\nImpostazioni: «← Torna ad Agria Commercial»');
-  const closing = options.waitForEvent('close', { timeout: 10000 }).then(() => true, () => false);
-  await options.click('#back').catch(() => {}); // la scheda si chiude durante il clic
-  check('la scheda delle Impostazioni si chiude e si torna al pannello', await closing);
+  console.log('\nImpostazioni: «← Torna ad Agria Commercial» non chiude mai Chrome (Patch 0.4.1)');
+  const backStatus = (page) => page.waitForFunction(() => !document.querySelector('#back-status').hidden, null, { timeout: 10000 })
+    .then(() => page.textContent('#back-status'), () => '');
+  const BACK_OK = 'Agria Commercial è aperto nel pannello laterale.';
+  const BACK_FAILED = 'Non è stato possibile riaprire il pannello da qui.';
+  // 1. «Impostazioni» dal pannello (Chrome riusa la scheda già aperta), poi «Torna»
+  const settingsUrl = `chrome-extension://${extId}/options/options.html`;
+  await panel.click('#open-settings');
+  let returnTab = null;
+  for (let i = 0; i < 50 && !returnTab; i += 1) {
+    returnTab = await panel.evaluate(() => chrome.storage.session.get('settingsReturn').then((r) => r.settingsReturn || null));
+    if (!returnTab) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  check('il pannello registra la scheda di ritorno (solo id, nella sessione)', Number.isInteger(returnTab?.tabId) && Number.isInteger(returnTab?.windowId), JSON.stringify(returnTab));
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  for (const extra of context.pages().filter((p) => p !== options && p.url() === settingsUrl)) await extra.close(); // un'eventuale seconda scheda
+  const openPages = context.pages().length;
+  let closed = false;
+  options.on('close', () => { closed = true; });
+  await options.click('#back');
+  const msg1 = (await backStatus(options)).trim();
+  check('esito mostrato nella pagina', msg1 === BACK_OK || msg1.startsWith(BACK_FAILED), msg1);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  check('la scheda delle Impostazioni resta aperta', !closed && !options.isClosed());
+  equal('nessuna scheda chiusa', context.pages().length, openPages);
+  // 2. caso del PC di Alessandro: le Impostazioni sono l'unica scheda della loro finestra
+  const [alone] = await Promise.all([
+    context.waitForEvent('page'),
+    panel.evaluate((u) => chrome.windows.create({ url: u, focused: true }), settingsUrl),
+  ]);
+  watch(alone, 'impostazioni (finestra sola)');
+  await alone.waitForSelector('#back');
+  const windowId = await alone.evaluate(() => chrome.tabs.getCurrent().then((t) => t.windowId));
+  equal('unica scheda della finestra', await panel.evaluate((id) => chrome.tabs.query({ windowId: id }).then((t) => t.length), windowId), 1);
+  let aloneClosed = false;
+  alone.on('close', () => { aloneClosed = true; });
+  await alone.click('#back');
+  const msg2 = (await backStatus(alone)).trim();
+  check('finestra sola: esito sicuro mostrato', msg2 === BACK_OK || msg2.startsWith(BACK_FAILED), msg2);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  check('finestra sola: la pagina resta aperta', !aloneClosed && !alone.isClosed());
+  check('finestra sola: la finestra di Chrome resta aperta', await panel.evaluate((id) => chrome.windows.get(id).then(() => true, () => false), windowId));
+  equal('finestra sola: la scheda c\'è ancora', await panel.evaluate((id) => chrome.tabs.query({ windowId: id }).then((t) => t.length), windowId), 1);
+  await alone.screenshot({ path: path.join(OUT, '6b-impostazioni-torna.png') });
+  await alone.close();
+  check('le Impostazioni di prima restano utilizzabili', !options.isClosed());
 
   console.log("\nErrori nelle pagine dell'estensione");
   check('nessun errore JavaScript', errors.length === 0, errors.join(' | '));

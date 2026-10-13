@@ -9,6 +9,7 @@
 import { applySetting, loadConfig, notifyConfigChanged, saveConfig } from '../lib/config.js';
 import { MESSAGE, STATUS_CHANGED } from '../lib/hubspotMessages.js';
 import { loadActiveOperator, onOperatorChange, OPERATORS } from '../lib/operators.js';
+import { BACK_MESSAGES, backToAgria } from './backToAgria.js';
 
 const form = document.querySelector('#settings');
 const saved = document.querySelector('#saved');
@@ -199,21 +200,23 @@ async function onRemoveKey() {
   else setLine('#key-status', res.error.message, 'error');
 }
 
-// «← Torna ad Agria Commercial»: il pannello laterale resta nella finestra; si salva ciò che manca e si
-// chiude questa scheda. sidePanel.open va chiamato subito, dentro il clic.
-function backToScout(tab) {
-  if (tab?.windowId != null) chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
-  const pending = [...typing.keys()];
-  for (const name of pending) commit(name, valueOf(name));
-  queue.finally(() => {
-    if (tab?.id != null) chrome.tabs.remove(tab.id).catch(() => window.close());
-    else window.close();
+// «← Torna ad Agria Commercial»: riapre il pannello laterale e torna alla scheda del prospect, senza
+// chiudere mai questa pagina né la finestra (vedi backToAgria.js). backToAgria va chiamata per prima,
+// dentro il clic: sidePanel.open vale solo durante il gesto dell'utente. Poi si salva ciò che manca.
+function onBack(tab) {
+  const going = backToAgria({ sidePanel: chrome.sidePanel, tabs: chrome.tabs, session: chrome.storage.session }, tab);
+  for (const name of [...typing.keys()]) commit(name, valueOf(name));
+  going.then(({ opened }) => {
+    const line = $('#back-status');
+    line.textContent = opened ? BACK_MESSAGES.opened : BACK_MESSAGES.failed;
+    line.dataset.kind = opened ? 'ok' : 'warn';
+    line.hidden = false;
   });
 }
 
 async function init() {
   const tab = await chrome.tabs.getCurrent().catch(() => null);
-  document.querySelector('#back').addEventListener('click', () => backToScout(tab));
+  document.querySelector('#back').addEventListener('click', () => onBack(tab));
   renderOperators(null);
   onOperatorChange(renderOperators);
   renderOperators(await loadActiveOperator().catch(() => null));

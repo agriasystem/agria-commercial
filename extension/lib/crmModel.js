@@ -6,10 +6,10 @@
 // Quando le pagine contengono valori diversi non si sceglie in silenzio: il principale è il più
 // affidabile, gli altri restano come alternative.
 
-import { emailCategory, METHOD } from './parser.js';
+import { COMMON_WORDS, emailCategory, METHOD } from './parser.js';
 import { factsOf, isContactEligible, peopleOf } from './siteData.js';
-import { normalizeEmail, normalizePhone, normKey } from './validation.js';
-import { isProvinceCode, normalizeCountry, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
+import { normalizeEmail, normalizePhone, normKey, sameSite } from './validation.js';
+import { comuneFromCap, isProvinceCode, normalizeCountry, normalizeRegion, provinceFromName, regionFromProvince } from './italy.js';
 
 export const SETTORE_OPTIONS = ['Hospitality', 'Cantina / Vitivinicolo', 'Frantoio / Olivicolo', 'Altro'];
 export const TIPO_STRUTTURA_OPTIONS = [
@@ -143,18 +143,53 @@ export function proposeSector(signals = {}) {
   return { value: sector, reliability: 'check', method: 'parole chiave del sito', url: '', evidence: evidenceOf(signals, SECTOR_TERMS[sector]), alternatives: [] };
 }
 
+// Servizi PROPRI della struttura (vedi companyData.ownServiceSignals): servono almeno due prove di tipo
+// diverso. Con un ristorante (o una spa) davvero suoi il tipo è «Struttura con ristorante» («… con spa»),
+// che vince sul generico «Agriturismo»; i tipi specifici (Relais, Masseria, Boutique Hotel…) restano.
+// Spa prima del ristorante, come nell'ordine già in uso.
+const OWN_SERVICES = [['Struttura con spa', 'spa'], ['Struttura con ristorante', 'ristorante']];
+const OWN_PROOFS = {
+  titolo: (s) => (s === 'spa' ? '«con spa» nel titolo' : '«con ristorante» nel titolo'),
+  sezione: (s) => (s === 'spa' ? 'sezione «Spa» del sito' : 'sezione «Ristorante» del sito'),
+  uso: (s) => (s === 'spa' ? 'trattamenti / prenotazione spa' : 'prenotazione del tavolo / orari'),
+  schema: () => "dati strutturati dell'azienda",
+};
+const MIN_OWN_PROOFS = 2;
+const OVERRIDDEN_BY_SERVICE = new Set(['Agriturismo']);
+
+function ownService(signals) {
+  for (const [type, service] of OWN_SERVICES) {
+    const proofs = Object.keys(OWN_PROOFS).filter((p) => signals[`proprio:${service}:${p}`] > 0);
+    if (proofs.length >= MIN_OWN_PROOFS) {
+      return { value: type, reliability: 'check', method: 'servizi propri della struttura', url: '', evidence: `Prove: ${proofs.map((p) => OWN_PROOFS[p](service)).join(', ')}`, alternatives: [] };
+    }
+  }
+  return null;
+}
+// almeno una prova che il ristorante è della struttura (per la sola parola «ristorante» nel testo non basta)
+const hasOwnProof = (signals, service) => Object.keys(OWN_PROOFS).some((p) => signals[`proprio:${service}:${p}`] > 0);
+
 export function proposeStructure(signals = {}, names = []) {
+  const own = ownService(signals);
+  const withOwn = (proposal) => (own && OVERRIDDEN_BY_SERVICE.has(proposal.value) ? { ...own, alternatives: [proposal.value] } : proposal);
   for (const name of names) {
     const lower = name.toLowerCase();
     const hit = STRUCTURE_TERMS.find(([, terms]) => terms.some((t) => !t.startsWith('schema:') && lower.includes(t)));
-    if (hit) return { value: hit[0], reliability: 'check', method: 'nome della struttura', url: '', evidence: name, alternatives: [] };
+    if (hit) return withOwn({ value: hit[0], reliability: 'check', method: 'nome della struttura', url: '', evidence: name, alternatives: [] });
   }
-  for (const group of [STRUCTURE_TERMS, SERVICE_TERMS]) {
-    const [type, score] = group.map(([t, terms]) => [t, termScore(signals, terms)]).sort((a, b) => b[1] - a[1])[0];
-    if (score >= MIN_TYPE_SCORE) {
-      const terms = group.find(([t]) => t === type)[1];
-      return { value: type, reliability: 'check', method: 'parole chiave del sito', url: '', evidence: evidenceOf(signals, terms), alternatives: [] };
-    }
+  const best = (group) => group.map(([t, terms]) => [t, termScore(signals, terms)]).sort((a, b) => b[1] - a[1])[0];
+  const [type, score] = best(STRUCTURE_TERMS);
+  if (score >= MIN_TYPE_SCORE) {
+    const terms = STRUCTURE_TERMS.find(([t]) => t === type)[1];
+    return withOwn({ value: type, reliability: 'check', method: 'parole chiave del sito', url: '', evidence: evidenceOf(signals, terms), alternatives: [] });
+  }
+  if (own) return own;
+  // solo parole chiave: la spa come prima; il ristorante solo con almeno una prova che è della struttura
+  const services = SERVICE_TERMS.filter(([t]) => t !== 'Struttura con ristorante' || hasOwnProof(signals, 'ristorante'));
+  const [service, serviceScore] = best(services);
+  if (serviceScore >= MIN_TYPE_SCORE) {
+    const terms = SERVICE_TERMS.find(([t]) => t === service)[1];
+    return { value: service, reliability: 'check', method: 'parole chiave del sito', url: '', evidence: evidenceOf(signals, terms), alternatives: [] };
   }
   return emptyProposal();
 }
@@ -162,7 +197,8 @@ export function proposeStructure(signals = {}, names = []) {
 /** Tipo di struttura per il settore scelto: solo per l'Hospitality, altrimenti nessun valore. */
 export function proposeStructureFor(site, settore) {
   return settore === 'Hospitality'
-    ? proposeStructure(site.signals, factsOf(site, 'name').slice(0, 3).map((f) => f.value))
+    // il nome com'era scritto: "Agriturismo" tolto dal nome resta un indizio del tipo di struttura
+    ? proposeStructure(site.signals, factsOf(site, 'name').slice(0, 3).map((f) => f.extra.full || f.value))
     : emptyProposal();
 }
 
@@ -182,6 +218,8 @@ const sourceOf = (fact) => ({ url: fact.best?.url || '', evidence: fact.best?.ev
  */
 function provinceOf(site, place) {
   if (place.extra.province) return { code: place.extra.province, fact: place, how: '' };
+  const byCap = comuneFromCap(place.extra.cap);
+  if (byCap) return { code: byCap.province, fact: place, how: `dal CAP ${place.extra.cap}` };
   const other = factsOf(site, 'address').find((a) => a.extra.province && samePlace(a, place));
   if (other) return { code: other.extra.province, fact: other, how: "da un altro indirizzo della stessa località" };
   const mentions = factsOf(site, 'province');
@@ -191,17 +229,23 @@ function provinceOf(site, place) {
     || only(mentions.filter((f) => !f.extra.city), 'unica provincia indicata nel sito');
 }
 
+// Indirizzo italiano: paese Italia, provincia italiana o CAP di un capoluogo. Il paese serve solo a
+// queste regole: per un prospect italiano `country` non si propone (vedi proposeCompany).
+const isItalianAddress = (x) => normalizeCountry(x.country) === 'Italia' || isProvinceCode(x.province) || Boolean(comuneFromCap(x.cap));
+
 function regionOf(address, site) {
   const x = address.extra;
   const source = { method: address.best?.method || '', url: address.best?.url || '', evidence: address.best?.evidence || '' };
-  if (x.regionText) {
-    const region = normalizeRegion(x.regionText);
+  // `state` è la regione: "Italia" scritto come regione (succede nel JSON-LD) non lo è mai
+  if (x.regionText && normalizeCountry(x.regionText) !== 'Italia') {
+    const region = normalizeRegion(x.regionText) || x.regionText.split(/[,;–-]+/).map(normalizeRegion).find(Boolean);
     if (region) return { value: region, reliability: address.reliability, ...source };
     const code = x.regionText.toUpperCase();
     if (isProvinceCode(code)) return { value: regionFromProvince(code), reliability: 'high', ...source, method: `dedotta dalla provincia (${code})` };
     const byName = provinceFromName(x.regionText);
     if (byName) return { value: regionFromProvince(byName), reliability: 'check', ...source, method: `dedotta dalla provincia di ${x.regionText}` };
-    return { value: x.regionText, reliability: address.reliability, ...source }; // regione estera: com'è scritta
+    // regione estera: com'è scritta; per un indirizzo italiano un testo che non è una regione non si usa
+    if (!isItalianAddress(x)) return { value: x.regionText, reliability: address.reliability, ...source };
   }
   const province = provinceOf(site, address);
   if (province) {
@@ -215,6 +259,24 @@ function regionOf(address, site) {
   const capital = provinceFromName(x.city);
   if (capital) return { value: regionFromProvince(capital), reliability: 'check', ...source, method: 'dedotta dalla città (capoluogo di provincia)' };
   return null;
+}
+
+/**
+ * Comune dell'indirizzo. Quello scritto, salvo un CAP di capoluogo coerente con la provincia: allora il
+ * comune è quello del CAP e il nome scritto è una località ("Loc. Pieve Pagliaccia Bosco 06134 (PG)" →
+ * Perugia). Mai dalla sola sigla della provincia: "(PG)" non dice in quale comune si trova l'azienda.
+ */
+function cityOf(address) {
+  const x = address.extra;
+  const byCap = comuneFromCap(x.cap, x.province);
+  if (byCap && normKey(byCap.comune) !== normKey(x.city)) {
+    const written = x.city || x.locality;
+    return {
+      ...fromFact(address), value: byCap.comune, reliability: x.province ? 'high' : 'check',
+      method: `comune dal CAP ${x.cap}${x.province ? ` (${x.province})` : ''}${written ? `; località indicata: ${written}` : ''}`,
+    };
+  }
+  return x.city ? { ...fromFact(address), value: x.city } : null;
 }
 
 function countryOf(address, region, site) {
@@ -264,6 +326,8 @@ export function proposeCompany(site, { fixed = {} } = {}) {
 
   const addresses = addressesOf(site);
   const place = addresses[0];
+  const city = place ? cityOf(place) : null;
+  const cities = unique(addresses.map((a) => cityOf(a)?.value));
   const region = place ? regionOf(place, site) : null;
   const country = place ? countryOf(place, region, site) : null;
   const linkedin = factsOf(site, 'social').filter((f) => f.extra.network === 'LinkedIn');
@@ -278,15 +342,108 @@ export function proposeCompany(site, { fixed = {} } = {}) {
     email_aziendale_secondaria: fromFact(secondary, allEmails),
     settore_agria: sector,
     tipo_struttura_hospitality: proposeStructureFor(site, fixed.settore_agria ?? sector.value),
-    city: place?.extra.city
-      ? { ...fromFact(place), value: place.extra.city, alternatives: unique(addresses.map((a) => a.extra.city)).filter((c) => c !== place.extra.city) }
-      : emptyProposal(addresses.map((a) => a.extra.city)),
+    city: city
+      ? { ...city, alternatives: cities.filter((c) => c !== city.value) }
+      : emptyProposal(cities),
     state: region ? { ...region, alternatives: [] } : emptyProposal(),
-    country: country ? { ...country, alternatives: [] } : emptyProposal(),
+    // prospect italiano: il paese non si scrive in HubSpot (basta la regione); un paese estero sì
+    country: country && country.value !== 'Italia' ? { ...country, alternatives: [] } : emptyProposal(),
     linkedin_company_page: fromFact(linkedin[0], linkedin.slice(1).map((f) => f.value)),
     hs_lead_status: fixedValue(LEAD_STATUS.value, 'nuovo prospect'),
     hs_quick_context: emptyProposal(),
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Email aziendali per il primo contatto (Outreach): una fonte strutturata, calcolata dalla bozza di
+// Scout (tutte le email trovate dal sito, più principale e secondaria del form). Nessuna lettura del
+// Contesto rapido. Ogni indirizzo ha il suo esito: utilizzabile come destinatario o escluso, col motivo.
+
+export const EMAIL_EXCLUSION = Object.freeze({
+  pec: 'PEC',
+  privacy: 'privacy / protezione dati',
+  noreply: 'indirizzo automatico',
+  technical: 'indirizzo tecnico',
+  notCommercial: 'amministrativo, legale o tecnico',
+  person: 'email di una persona',
+  provider: 'fornitore esterno (sito web, agenzia)',
+  external: "dominio estraneo all'azienda",
+});
+// caselle di posta gratuite: dell'azienda solo se il nome della casella richiama il prospect
+const FREE_MAIL = /(^|\.)(gmail\.com|googlemail\.com|libero\.it|hotmail\.[a-z.]+|outlook\.[a-z.]+|live\.[a-z.]+|msn\.com|yahoo\.[a-z.]+|ymail\.com|icloud\.com|me\.com|alice\.it|tin\.it|tim\.it|virgilio\.it|tiscali\.it|fastwebnet\.it|email\.it|inwind\.it|iol\.it|katamail\.com|gmx\.[a-z.]+|proton(?:mail)?\.[a-z.]+)$/;
+const PRIVACY_LOCAL = /^(privacy|dpo|gdpr|dataprotection|protezionedati)/;
+const NOREPLY_LOCAL = /^(no-?reply|do-?not-?reply|mailer-daemon|bounces?)/;
+const TECHNICAL_LOCAL = /^(webmaster|postmaster|hostmaster|abuse)/;
+// non sono caselle per una proposta commerciale: amministrazione, fatture, legale, personale, tecnica
+const NOT_COMMERCIAL = new Set([
+  'amministrazione', 'administration', 'admin', 'fatture', 'fatturazione', 'fattura', 'contabilita', 'accounting', 'billing',
+  'invoice', 'invoices', 'legale', 'legal', 'ufficiolegale', 'hr', 'risorseumane', 'lavoraconnoi', 'lavora', 'jobs', 'job',
+  'careers', 'career', 'cv', 'recruiting', 'newsletter', 'unsubscribe', 'tech', 'it', 'sistemi', 'developer', 'dev', 'sviluppo',
+  'hosting', 'server', 'web', 'website',
+]);
+// l'email compare solo accanto ai crediti del sito: è del fornitore, non dell'azienda
+const PROVIDER_CONTEXT = /realizzat[oa]|powered\s+by|design(?:ed)?\s+by|web\s*agency|credits?\b|sviluppat[oa]\s+da|a\s+cura\s+di|hosting|\bseo\b/i;
+
+const hostLabel = (host) => {
+  const parts = String(host).split('.');
+  return parts.length >= 2 ? parts.at(-2) : parts[0] || '';
+};
+// parole distintive del prospect (dal dominio e dal nome), per riconoscere le sue caselle
+function prospectTokens(domain, name) {
+  const words = [...String(hostLabel(domain)).split(/[^a-z0-9]+/i), ...String(name || '').split(/\s+/)].map(normKey);
+  return unique(words).filter((w) => w.length >= 4 && !COMMON_WORDS.has(w));
+}
+
+/**
+ * company: valori del form Azienda ({ name, email_aziendale_principale, email_aziendale_secondaria });
+ * edited: proprietà corrette a mano dal commerciale (un indirizzo scelto da lui vale come riconosciuto).
+ * → [{ email, role: 'principale' | 'secondaria' | 'altra', usable, reason }] senza doppioni: prima
+ * principale e secondaria, poi le altre nell'ordine di Scout. Sempre esclusi: PEC, privacy, indirizzi
+ * automatici e tecnici. La principale (l'email dell'Azienda in HubSpot) è esclusa solo se è del
+ * fornitore del sito. Secondaria e altre sono escluse anche se amministrative/legali/tecniche, di una
+ * persona, del fornitore del sito o di un dominio estraneo al prospect. Un indirizzo corretto a mano
+ * nel form vale come riconosciuto (restano solo le esclusioni fisse).
+ */
+export function companyEmails(site, company = {}, { edited = [] } = {}) {
+  const facts = factsOf(site, 'email');
+  const people = new Set(peopleOf(site).map((p) => normalizeEmail(p.email || '')).filter(Boolean));
+  const tokens = prospectTokens(site.domain, company.name);
+  const belongs = (local, host) => {
+    if (sameSite(host, site.domain)) return true;
+    const where = FREE_MAIL.test(host) ? normKey(local) : normKey(hostLabel(host));
+    return tokens.some((t) => where.includes(t));
+  };
+  const exclusion = (email, role) => {
+    const [local, host] = email.split('@');
+    const fact = facts.find((f) => f.value === email);
+    const category = emailCategory(email, fact?.extra || {});
+    if (category === 'pec') return 'pec';
+    if (PRIVACY_LOCAL.test(local)) return 'privacy';
+    if (NOREPLY_LOCAL.test(local)) return 'noreply';
+    if (category === 'system' || TECHNICAL_LOCAL.test(local)) return 'technical';
+    const field = { principale: 'email_aziendale_principale', secondaria: 'email_aziendale_secondaria' }[role];
+    if (field && edited.includes(field)) return ''; // scelto a mano dal commerciale
+    // casella che non richiama il prospect, vicino ai crediti del sito: è del fornitore
+    const own = belongs(local, host);
+    const provider = !own && fact?.sources.some((s) => PROVIDER_CONTEXT.test(s.evidence || ''));
+    if (role === 'principale') return provider ? 'provider' : ''; // l'email principale dell'Azienda in HubSpot
+    if (local.split(/[._+-]+|\d+/).some((part) => NOT_COMMERCIAL.has(part))) return 'notCommercial';
+    if (people.has(email) || category === 'personal') return 'person';
+    if (provider) return 'provider';
+    if (!own) return 'external';
+    return '';
+  };
+  const out = [];
+  const push = (raw, role) => {
+    const email = normalizeEmail(raw || '');
+    if (!email || out.some((e) => e.email === email)) return;
+    const reason = exclusion(email, role);
+    out.push({ email, role, usable: !reason, reason: reason ? EMAIL_EXCLUSION[reason] : '' });
+  };
+  push(company.email_aziendale_principale, 'principale');
+  push(company.email_aziendale_secondaria, 'secondaria');
+  for (const f of facts) push(f.value, 'altra');
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------

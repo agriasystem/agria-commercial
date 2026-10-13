@@ -13,7 +13,7 @@
 // Il prospect viene dalla bozza di Scout (una sola fonte): nessuna copia dei suoi dati.
 
 import { hubspotState, hubspotTarget } from './draft.js';
-import { COMPANY_FIRST_EMAIL, CONTACT_FIRST_EMAIL, leadStatusLabel } from './crmModel.js';
+import { COMPANY_FIRST_EMAIL, companyEmails, CONTACT_FIRST_EMAIL, leadStatusLabel } from './crmModel.js';
 import { followUpSchedule, hubspotInstant, romeIsoDate } from './outreachTime.js';
 
 export const COMPANY_DATE = COMPANY_FIRST_EMAIL;
@@ -46,24 +46,28 @@ export function taskBody(contact = null) {
 /**
  * Prospect pronto per il primo contatto, letto dalla bozza di Scout: l'Azienda creata da Scout o
  * l'unica trovata con certezza in HubSpot (la stessa regola del Contatto in Scout). null se non c'è.
- * → { companyId, name, existing, leadStatus, url, emails: [{ kind, email }], contact: { id, name, jobtitle } | null }
+ * emails: le email aziendali utilizzabili (companyEmails: principale, secondaria e le altre trovate da
+ * Scout); excluded: quelle trovate ma non suggerite, col motivo (PEC, privacy, fornitore…).
+ * → { companyId, name, existing, leadStatus, url, emails: [{ kind, email }], excluded: [{ email, reason }],
+ *     contact: { id, name, jobtitle, email } | null }
  */
 export function outreachProspect(draft, mode) {
   const st = hubspotState(draft, mode);
   const target = hubspotTarget(st);
   if (!target?.id) return null;
   const value = (section, name) => str(draft?.[section]?.[name]?.value, 200);
-  const emails = [];
-  for (const [kind, prop] of [['principale', 'email_aziendale_principale'], ['secondaria', 'email_aziendale_secondaria']]) {
-    const email = value('company', prop).toLowerCase();
-    if (EMAIL_RE.test(email) && !emails.some((e) => e.email === email)) emails.push({ kind, email });
-  }
+  const company = Object.fromEntries(['name', 'email_aziendale_principale', 'email_aziendale_secondaria'].map((p) => [p, value('company', p)]));
+  const edited = ['email_aziendale_principale', 'email_aziendale_secondaria'].filter((p) => draft?.company?.[p]?.edited === true);
+  const found = draft?.site ? companyEmails(draft.site, company, { edited }) : [];
+  const emails = found.filter((e) => e.usable).map((e) => ({ kind: e.role, email: e.email }));
+  const excluded = found.filter((e) => !e.usable).map((e) => ({ email: e.email, reason: e.reason }));
+  const email = (v) => (EMAIL_RE.test(str(v).toLowerCase()) ? str(v).toLowerCase() : '');
   let contact = null;
   if (st.contact?.id && (!st.contact.companyId || st.contact.companyId === target.id)) {
-    contact = { id: st.contact.id, name: str(st.contact.name), jobtitle: value('contact', 'jobtitle') };
+    contact = { id: st.contact.id, name: str(st.contact.name), jobtitle: value('contact', 'jobtitle'), email: email(value('contact', 'email')) };
   } else if (Array.isArray(st.contactMatches) && st.contactMatches.length === 1 && st.contactMatches[0].id) {
     const m = st.contactMatches[0];
-    contact = { id: m.id, name: str(m.name), jobtitle: str(m.jobtitle) };
+    contact = { id: m.id, name: str(m.name), jobtitle: str(m.jobtitle), email: email(m.email) };
   }
   return {
     companyId: target.id,
@@ -72,23 +76,53 @@ export function outreachProspect(draft, mode) {
     leadStatus: target.existing ? str(target.leadStatus, 60) : 'NEW',
     url: str(target.url),
     emails,
+    excluded,
     contact,
   };
 }
 
 /**
- * Destinatari possibili della prima email: le email aziendali (o l'Azienda senza email nota) e il
- * Contatto HubSpot, se c'è. Il commerciale ne sceglie uno; nessuna scelta predefinita.
+ * Destinatari possibili della prima email: l'Azienda (A: email aziendale principale; CC suggeriti:
+ * secondaria e le altre email aziendali utilizzabili) e il Contatto HubSpot, se c'è. Il commerciale ne
+ * sceglie uno; nessuna scelta predefinita. → [{ key, type, contactId?, email, label, to, cc }]
  */
 export function recipientOptions(prospect) {
   if (!prospect) return [];
-  const company = prospect.emails.length
-    ? prospect.emails.map((e) => ({ key: `company:${e.email}`, type: 'company', email: e.email, label: `Azienda — ${e.email}` }))
-    : [{ key: 'company', type: 'company', email: '', label: 'Azienda — email aziendale' }];
-  const contact = prospect.contact
-    ? [{ key: `contact:${prospect.contact.id}`, type: 'contact', contactId: prospect.contact.id, label: personLabel(prospect.contact.name || 'Contatto', prospect.contact.jobtitle) }]
+  const [main, ...others] = prospect.emails.map((e) => e.email);
+  const company = {
+    key: 'company', type: 'company', email: main || '', label: main ? `Azienda — ${main}` : 'Azienda — email aziendale',
+    to: main || '', cc: others,
+  };
+  const c = prospect.contact;
+  const contact = c
+    ? [{ key: `contact:${c.id}`, type: 'contact', contactId: c.id, email: c.email || '', label: personLabel(c.name || 'Contatto', c.jobtitle), to: c.email || '', cc: [] }]
     : [];
-  return [...company, ...contact];
+  return [company, ...contact];
+}
+
+/**
+ * Destinatari da confermare per la scelta fatta (key) senza i CC tolti a mano (removed): quello che la
+ * verifica mostra e che il service worker registra, identico. null se la scelta non c'è più.
+ * → { key, type, contactId, label, to, cc: [CC rimasti], removed: [CC tolti] }
+ */
+export function outreachRecipients(prospect, key, removed = []) {
+  const option = recipientOptions(prospect).find((o) => o.key === key);
+  if (!option) return null;
+  const off = new Set(removed);
+  return {
+    key: option.key, type: option.type, contactId: option.contactId || '', label: option.label, to: option.to,
+    cc: option.cc.filter((e) => !off.has(e) && e !== option.to), removed: option.cc.filter((e) => off.has(e)),
+  };
+}
+
+/** Elenco di email per i messaggi: solo indirizzi validi, minuscoli, senza doppioni e senza il destinatario A. */
+export function cleanCc(list, to = '') {
+  const out = [];
+  for (const raw of Array.isArray(list) ? list : []) {
+    const e = str(raw, 254).toLowerCase();
+    if (EMAIL_RE.test(e) && e !== to && !out.includes(e)) out.push(e);
+  }
+  return out.slice(0, 20);
 }
 
 /**

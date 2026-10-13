@@ -24,6 +24,7 @@ import { createShell, nextStepCard } from '../shell/shell.js';
 import { nextStep as computeNextStep } from '../lib/nextStep.js';
 import { createOutreachPanel } from '../modules/outreach/outreachPanel.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
+import { RETURN_ITEM as SETTINGS_RETURN_ITEM } from '../options/backToAgria.js';
 import {
   allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
 } from './render.js';
@@ -494,6 +495,18 @@ function needsOperator() {
   return true;
 }
 
+// Impostazioni: si ricorda la scheda su cui si stava lavorando (solo id, nella sessione), così
+// «← Torna ad Agria Commercial» ci riporta lì senza chiudere nulla (options/backToAgria.js).
+async function openSettings() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id != null) await chrome.storage.session.set({ [SETTINGS_RETURN_ITEM]: { tabId: tab.id, windowId: tab.windowId } });
+  } catch {
+    // senza la scheda di ritorno il pulsante riapre comunque il pannello
+  }
+  chrome.runtime.openOptionsPage();
+}
+
 // ---------------------------------------------------------------------------------------------
 
 async function init() {
@@ -502,7 +515,7 @@ async function init() {
   $('#deep-scan').addEventListener('click', onDeepScan);
   $('#analyze').addEventListener('click', onAnalyze);
   $('#clear').addEventListener('click', onClear);
-  $('#open-settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
+  $('#open-settings').addEventListener('click', openSettings);
   $('#version').textContent = `v${chrome.runtime.getManifest().version}`;
 
   hub = createHubspotPanel({

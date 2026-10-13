@@ -1,5 +1,5 @@
-// Dati geografici italiani per ricavare la regione da sigla o nome della provincia.
-// Solo tabelle fisse: nessun servizio esterno.
+// Dati geografici italiani per ricavare la regione da sigla o nome della provincia e il comune dai
+// CAP dei capoluoghi. Solo tabelle fisse: nessun servizio esterno.
 
 import { normKey } from './validation.js';
 
@@ -89,6 +89,64 @@ export function regionFromProvince(code) {
 /** "Perugia" → "PG"; '' se il nome non è una provincia o un capoluogo. */
 export function provinceFromName(name) {
   return PROVINCE_BY_NAME.get(normKey(name)) || '';
+}
+
+// CAP dei capoluoghi di provincia: [primo, ultimo, comune, sigla]. Nel sistema dei CAP italiani questi
+// numeri (blocco del capoluogo: terza cifra 1, o 5/9 per le province più recenti) appartengono SOLO a quel
+// comune, frazioni comprese: "Loc. Pieve Pagliaccia 06134 (PG)" è nel comune di Perugia. Gli altri comuni
+// hanno CAP propri (terza cifra 0) che qui non ci sono: per quelli vale il comune scritto nel sito.
+// Si elencano solo intervalli certi; un CAP non in tabella non decide nulla.
+const CAPOLUOGHI_CAP = [
+  ['00118', '00199', 'Roma', 'RM'], ['01100', '01100', 'Viterbo', 'VT'], ['02100', '02100', 'Rieti', 'RI'],
+  ['03100', '03100', 'Frosinone', 'FR'], ['04100', '04100', 'Latina', 'LT'], ['05100', '05100', 'Terni', 'TR'],
+  ['06121', '06135', 'Perugia', 'PG'], ['07100', '07100', 'Sassari', 'SS'], ['08100', '08100', 'Nuoro', 'NU'],
+  ['09121', '09134', 'Cagliari', 'CA'], ['09170', '09170', 'Oristano', 'OR'], ['10121', '10156', 'Torino', 'TO'],
+  ['11100', '11100', 'Aosta', 'AO'], ['12100', '12100', 'Cuneo', 'CN'], ['13100', '13100', 'Vercelli', 'VC'],
+  ['13900', '13900', 'Biella', 'BI'], ['14100', '14100', 'Asti', 'AT'], ['15121', '15122', 'Alessandria', 'AL'],
+  ['16121', '16167', 'Genova', 'GE'], ['17100', '17100', 'Savona', 'SV'], ['18100', '18100', 'Imperia', 'IM'],
+  ['19121', '19137', 'La Spezia', 'SP'], ['20121', '20162', 'Milano', 'MI'], ['20900', '20900', 'Monza', 'MB'],
+  ['21100', '21100', 'Varese', 'VA'], ['22100', '22100', 'Como', 'CO'], ['23100', '23100', 'Sondrio', 'SO'],
+  ['23900', '23900', 'Lecco', 'LC'], ['24121', '24129', 'Bergamo', 'BG'], ['25121', '25136', 'Brescia', 'BS'],
+  ['26100', '26100', 'Cremona', 'CR'], ['26900', '26900', 'Lodi', 'LO'], ['27100', '27100', 'Pavia', 'PV'],
+  ['28100', '28100', 'Novara', 'NO'], ['28921', '28925', 'Verbania', 'VB'], ['29121', '29122', 'Piacenza', 'PC'],
+  ['30121', '30176', 'Venezia', 'VE'], ['31100', '31100', 'Treviso', 'TV'], ['32100', '32100', 'Belluno', 'BL'],
+  ['33100', '33100', 'Udine', 'UD'], ['33170', '33170', 'Pordenone', 'PN'], ['34121', '34151', 'Trieste', 'TS'],
+  ['34170', '34170', 'Gorizia', 'GO'], ['35121', '35143', 'Padova', 'PD'], ['36100', '36100', 'Vicenza', 'VI'],
+  ['37121', '37142', 'Verona', 'VR'], ['38121', '38123', 'Trento', 'TN'], ['39100', '39100', 'Bolzano', 'BZ'],
+  ['40121', '40141', 'Bologna', 'BO'], ['41121', '41126', 'Modena', 'MO'], ['42121', '42124', 'Reggio Emilia', 'RE'],
+  ['43121', '43126', 'Parma', 'PR'], ['44121', '44124', 'Ferrara', 'FE'], ['45100', '45100', 'Rovigo', 'RO'],
+  ['46100', '46100', 'Mantova', 'MN'], ['47121', '47122', 'Forlì', 'FC'], ['47521', '47522', 'Cesena', 'FC'],
+  ['47921', '47924', 'Rimini', 'RN'], ['48121', '48125', 'Ravenna', 'RA'], ['50121', '50145', 'Firenze', 'FI'],
+  ['51100', '51100', 'Pistoia', 'PT'], ['52100', '52100', 'Arezzo', 'AR'], ['53100', '53100', 'Siena', 'SI'],
+  ['54100', '54100', 'Massa', 'MS'], ['55100', '55100', 'Lucca', 'LU'], ['56121', '56128', 'Pisa', 'PI'],
+  ['57121', '57128', 'Livorno', 'LI'], ['58100', '58100', 'Grosseto', 'GR'], ['59100', '59100', 'Prato', 'PO'],
+  ['60121', '60131', 'Ancona', 'AN'], ['61121', '61122', 'Pesaro', 'PU'], ['62100', '62100', 'Macerata', 'MC'],
+  ['63100', '63100', 'Ascoli Piceno', 'AP'], ['63900', '63900', 'Fermo', 'FM'], ['64100', '64100', 'Teramo', 'TE'],
+  ['65121', '65129', 'Pescara', 'PE'], ['66100', '66100', 'Chieti', 'CH'], ['67100', '67100', "L'Aquila", 'AQ'],
+  ['70121', '70132', 'Bari', 'BA'], ['71121', '71122', 'Foggia', 'FG'], ['72100', '72100', 'Brindisi', 'BR'],
+  ['73100', '73100', 'Lecce', 'LE'], ['74121', '74123', 'Taranto', 'TA'], ['75100', '75100', 'Matera', 'MT'],
+  ['76121', '76121', 'Barletta', 'BT'], ['76123', '76123', 'Andria', 'BT'], ['76125', '76125', 'Trani', 'BT'],
+  ['80121', '80147', 'Napoli', 'NA'], ['81100', '81100', 'Caserta', 'CE'], ['82100', '82100', 'Benevento', 'BN'],
+  ['83100', '83100', 'Avellino', 'AV'], ['84121', '84135', 'Salerno', 'SA'], ['85100', '85100', 'Potenza', 'PZ'],
+  ['86100', '86100', 'Campobasso', 'CB'], ['86170', '86170', 'Isernia', 'IS'], ['87100', '87100', 'Cosenza', 'CS'],
+  ['88100', '88100', 'Catanzaro', 'CZ'], ['88900', '88900', 'Crotone', 'KR'], ['89121', '89135', 'Reggio Calabria', 'RC'],
+  ['89900', '89900', 'Vibo Valentia', 'VV'], ['90121', '90151', 'Palermo', 'PA'], ['91100', '91100', 'Trapani', 'TP'],
+  ['92100', '92100', 'Agrigento', 'AG'], ['93100', '93100', 'Caltanissetta', 'CL'], ['94100', '94100', 'Enna', 'EN'],
+  ['95121', '95131', 'Catania', 'CT'], ['96100', '96100', 'Siracusa', 'SR'], ['97100', '97100', 'Ragusa', 'RG'],
+  ['98121', '98168', 'Messina', 'ME'],
+];
+
+/**
+ * Comune dal CAP, solo per i CAP dei capoluoghi (vedi CAPOLUOGHI_CAP) → { comune, province } | null.
+ * province: la sigla scritta accanto al CAP; se non coincide con quella del CAP i dati non sono
+ * coerenti e il CAP non decide nulla.
+ */
+export function comuneFromCap(cap, province = '') {
+  const c = String(cap ?? '').trim();
+  if (!/^\d{5}$/.test(c)) return null;
+  const hit = CAPOLUOGHI_CAP.find(([from, to]) => c >= from && c <= to);
+  if (!hit || (province && province !== hit[3])) return null;
+  return { comune: hit[2], province: hit[3] };
 }
 
 /** "ITALY", "Italy", "italia", "IT" → "Italia"; un altro paese resta com'è scritto (ripulito). */

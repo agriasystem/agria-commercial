@@ -140,7 +140,7 @@ test('dati societari dalle pagine legali', () => {
   assert.equal(seat.value, 'Via Roma 1, 06123 Perugia (PG)');
   const company = proposeCompany(site);
   assert.equal(company.city.value, 'Assisi', 'la città è quella della struttura, non della sede legale');
-  assert.equal(company.country.value, 'Italia');
+  assert.equal(company.country.value, '', 'prospect italiano: paese non proposto');
 });
 
 test('modello HubSpot: proprietà, opzioni esatte, social, settore e tipo, owner e lead status', () => {
@@ -165,7 +165,7 @@ test('modello HubSpot: proprietà, opzioni esatte, social, settore e tipo, owner
   assert.equal(c.tipo_struttura_hospitality, 'Agriturismo');
   assert.equal(c.city, 'Assisi');
   assert.equal(c.state, 'Umbria');
-  assert.equal(c.country, 'Italia');
+  assert.equal(c.country, '');
   assert.equal(c.linkedin_company_page, 'https://www.linkedin.com/company/agriturismo-la-mora');
   assert.equal('hubspot_owner_id' in c, false, 'il proprietario non si propone dal sito: è il commerciale attivo');
   assert.equal(c.hs_lead_status, 'NEW');

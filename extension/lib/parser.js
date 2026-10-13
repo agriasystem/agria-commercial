@@ -27,6 +27,7 @@ export const METHOD = {
   metaBusiness: 'meta tag business',
   appName: 'meta tag application-name',
   title: 'titolo della pagina',
+  heading: 'intestazione della pagina',
   copyright: 'copyright',
   mailto: 'link email',
   tel: 'link telefono',
@@ -77,6 +78,7 @@ export function analyzeSnapshot(snapshot, { pageType = 'other' } = {}) {
     microdata: asArray(snapshot.microdata).filter(isObject),
     addressBlocks: asArray(snapshot.addresses).filter((s) => typeof s === 'string'),
     headings: asArray(snapshot.headings).filter((s) => typeof s === 'string'),
+    subheadings: asArray(snapshot.subheadings).filter((s) => typeof s === 'string'),
     resources: asArray(snapshot.resources).filter((s) => typeof s === 'string'),
     text: { header: str(text.header), footer: str(text.footer), page: str(text.page) },
     ld: flattenJsonLd(asArray(snapshot.jsonld)),
@@ -249,7 +251,7 @@ function rankOrganizations(nodes, domain) {
 const GENERIC_TITLE = /^(home|home ?page|pagina iniziale|benvenut[io]|welcome|contatti|contattaci|contatto|contacts?|contact us|chi siamo|about|about us|dove siamo|sito ufficiale|official (?:web)?site|news|blog|shop|negozio|privacy policy|cookie policy)$/i;
 const WELCOME_PREFIX = /^(?:benvenut[io]|welcome)\s+(?:(?:a|al|all['’]|alla|allo|ai|agli|in|nel|nella|presso|to|at)\s*)?/i;
 // parole troppo comuni per collegare un nome al dominio (agriturismo-xyz.it)
-const COMMON_WORDS = new Set([
+export const COMMON_WORDS = new Set([
   'agriturismo', 'cantina', 'cantine', 'azienda', 'agricola', 'hotel', 'ristorante', 'tenuta', 'villa',
   'casa', 'podere', 'fattoria', 'frantoio', 'oleificio', 'societa', 'home', 'vini', 'wine', 'winery',
   'resort', 'relais', 'masseria', 'casale', 'borgo', 'osteria', 'trattoria', 'italia', 'italy',
@@ -294,14 +296,59 @@ function copyrightName(text) {
   return isPlausibleCompanyName(name) && !/^(tutti|all rights)/i.test(name) ? { name, evidence: snippet(text, m.index, m[0].length) } : null;
 }
 
+// ---- pulizia del nome: descrittori generici che qualificano la struttura, non ne fanno parte ----
+// "Agriturismo Il Cantico delle Cicale, con ristorante" → "Il Cantico delle Cicale". Mai un replace
+// globale: si guarda solo la coda dopo «con» o dopo una virgola, e il tipo in testa o in coda.
+const FACILITY = String.raw`(?:ristorante|restaurant|piscina|spa|centro\s+benessere|wellness|camere|suites?|cucina|enoteca|cantina|bar)`;
+const FACILITY_LIST = String.raw`${FACILITY}(?:\s*(?:,|\be\b|&|\+)\s*${FACILITY})*`;
+// «, con ristorante», «con piscina e spa», «– con il nostro ristorante»
+const WITH_TAIL = new RegExp(String.raw`(?:\s*[,–—|]\s*|\s+-\s+|\s+)con\s+(?:(?:il|la|un|una)\s+)?(?:(?:propri[oa]|nostr[oa])\s+)?${FACILITY_LIST}\s*\.?$`, 'iu');
+// «, ristorante e camere»: elenco di servizi dopo una virgola
+const LIST_TAIL = new RegExp(String.raw`\s*,\s*${FACILITY_LIST}\s*\.?$`, 'iu');
+const TYPE_WORDS = String.raw`(?:agriturismo|hotel|albergo|relais|resort|ristorante|b\s*&\s*b|bed\s*(?:&|and)\s*breakfast|country\s+house|residence|casa\s+vacanze)`;
+const TYPE_LEAD = new RegExp(String.raw`^${TYPE_WORDS}\s+`, 'iu');
+const TYPE_TAIL = new RegExp(String.raw`\s*(?:[-–|]\s*)?(?:${TYPE_WORDS}(?:\s*(?:&|e)\s*(?:spa|wellness))?|(?:&|e)\s+(?:spa|wellness))$`, 'iu');
+const wordCount = (s) => s.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
+
+/**
+ * Nome commerciale senza i descrittori generici (export per i test).
+ * known: chiavi (normKey) dei nomi che il sito scrive da solo, in intestazioni e dati strutturati.
+ * 1. qualificatori in coda («con ristorante»): via, se resta un nome di almeno due parole;
+ * 2. tipo in testa o in coda («Agriturismo …», «… Relais & Spa»): via SOLO se il sito scrive anche il
+ *    nome senza il tipo e mai quello completo; altrimenti il tipo fa parte del nome ("Agriturismo La Mora").
+ */
+export function cleanCompanyName(raw, { known = new Set() } = {}) {
+  let name = cleanText(raw, 120);
+  for (const re of [WITH_TAIL, LIST_TAIL]) {
+    const cut = trimSeparators(name.replace(re, ''));
+    if (cut !== name && (wordCount(cut) >= 2 || known.has(normKey(cut)))) name = cut;
+  }
+  if (!known.has(normKey(name))) {
+    for (const re of [TYPE_LEAD, TYPE_TAIL]) {
+      const cut = trimSeparators(name.replace(re, ''));
+      if (cut !== name && wordCount(cut) >= 2 && known.has(normKey(cut))) name = cut;
+    }
+  }
+  return name;
+}
+
 function collectNames(ctx, add) {
   let found = 0;
+  const label = domainLabel(ctx.domain);
+  // nomi che il sito scrive da soli: intestazioni (senza «Benvenuti a…»), og:site_name, JSON-LD
+  const headings = [...ctx.headings, ...ctx.subheadings].map((h) => cleanText(h.replace(/[“”"«»]/g, ''), 120).replace(WELCOME_PREFIX, '')).filter(isPlausibleCompanyName);
+  const known = new Set([...headings, str(ctx.meta['og:site_name']), ...ctx.orgs.map((o) => ldText(o.node.name))].filter(Boolean).map(normKey));
   const addName = (value, score, method, high, evidence) => {
-    const v = cleanText(value, 120);
+    const full = cleanText(value, 120);
+    const v = cleanCompanyName(full, { known });
     if (!isPlausibleCompanyName(v)) return;
-    add('name', v, { method, score, high, evidence });
+    add('name', v, { method, score, high, evidence, extra: v !== full ? { full } : {} });
     found += 1;
   };
+  // intestazione che coincide con il dominio: il marchio scritto dal sito ("Il Cantico delle Cicale")
+  for (const h of new Set(headings)) {
+    if (normKey(h) === normKey(label)) addName(h, 7, METHOD.heading, false, `intestazione: ${h}`);
+  }
   ctx.orgs.forEach((org, i) => {
     const types = org.types.join(', ');
     addName(ldText(org.node.name), i === 0 ? 10 : 6, METHOD.jsonld, true, `JSON-LD ${types}: name`);
@@ -310,7 +357,6 @@ function collectNames(ctx, add) {
   });
   const siteName = str(ctx.meta['og:site_name']);
   addName(siteName, 8, METHOD.ogSiteName, true, `og:site_name = ${siteName}`);
-  const label = domainLabel(ctx.domain);
   const segments = titleSegments(ctx.title);
   const matching = segments.filter((s) => matchesDomain(s, label));
   for (const s of matching) addName(s, 7, METHOD.title, false, `titolo: ${ctx.title}`);
@@ -584,6 +630,11 @@ function streetFrom(text) {
   return street.length >= 5 && street.length <= 120 && !/[@:]|https?/i.test(street) ? street : '';
 }
 
+// località o frazione (non è il comune): "Loc. Pieve Pagliaccia Bosco" → "Pieve Pagliaccia Bosco"
+const LOCALITY_START = /^(?:località|loc\.|frazione|fraz\.|vocabolo|voc\.)\s*/iu;
+const LOCALITY_IN = /(?:^|[\s,|])(?:località|loc\.|frazione|fraz\.|vocabolo|voc\.)\s*([^,;|]+)/iu;
+const localityOf = (street) => cleanText((String(street).match(LOCALITY_IN)?.[1] || '').split(/\s[-–]\s/)[0], 80);
+
 function addressesInText(text, baseScore, method, out) {
   if (!text) return;
   const lines = text.split(/\n+/).map((l) => l.replace(/[ \t ]+/g, ' ').trim()).filter(Boolean);
@@ -595,6 +646,7 @@ function addressesInText(text, baseScore, method, out) {
       let province = '';
       let afterPlace = '';
       let cityFirst = false;
+      let noCity = false;
       const withProvince = rest.match(CAP_CITY_PROVINCE);
       const code = withProvince && (withProvince[3] || withProvince[4] || withProvince[5]);
       const capProvince = rest.match(CAP_PROVINCE);
@@ -609,6 +661,15 @@ function addressesInText(text, baseScore, method, out) {
         afterPlace = rest.slice(capProvince[0].length);
         before = before.slice(0, before.length - cityBefore[0].length);
         cityFirst = true;
+      } else if (capProvince && isProvinceCode(capProvince[2])) {
+        // "Loc. Pieve Pagliaccia Bosco 06134 (PG)", "06134 (PG)": CAP e provincia senza il comune.
+        // La località non è il comune e la sola provincia non lo dice: il comune resta vuoto
+        // (lo può dare il CAP, vedi crmModel), la provincia vale per la regione.
+        city = '';
+        province = capProvince[2];
+        afterPlace = rest.slice(capProvince[0].length);
+        cityFirst = true;
+        noCity = true;
       } else {
         const plain = rest.match(CAP_CITY);
         if (!plain) continue;
@@ -617,16 +678,23 @@ function addressesInText(text, baseScore, method, out) {
       }
       STREET_RE.lastIndex = 0;
       city = city.replace(/[.,;:]+$/, '');
-      if (!city) continue;
+      if (!city && !noCity) continue;
       const fromPreviousLine = i > 0 && !trimSeparators(before);
-      const street = (cityFirst ? streetFrom(before) : streetBefore(before)) || (fromPreviousLine ? streetBefore(lines[i - 1]) : '');
+      let street = (cityFirst ? streetFrom(before) : streetBefore(before)) || (fromPreviousLine ? streetBefore(lines[i - 1]) : '');
+      // solo la località qui, la via sulla riga prima: "Strada Eugubina 225" + "Loc. Pieve Pagliaccia Bosco"
+      if (noCity && LOCALITY_START.test(street)) {
+        const above = lines[i - (fromPreviousLine ? 2 : 1)];
+        const road = above ? streetBefore(above) : '';
+        if (road && !LOCALITY_START.test(road)) street = `${road}, ${street}`;
+      }
+      STREET_RE.lastIndex = 0;
       if (!province && !street) continue;
       city = smartCase(city);
       const country = COUNTRY_AFTER.test(afterPlace) ? 'Italia' : '';
-      const address = [street, `${m[0]} ${city}${province ? ` (${province})` : ''}`].filter(Boolean).join(', ');
+      const address = [street, `${m[0]}${city ? ` ${city}` : ''}${province ? ` (${province})` : ''}`].filter(Boolean).join(', ');
       const context = `${fromPreviousLine ? lines[i - 1] : ''} ${before}`.slice(-160);
       out.push({
-        address, street, cap: m[0], city, province, regionText: '', country,
+        address, street, cap: m[0], city, locality: localityOf(street), province, regionText: '', country,
         score: baseScore + (street ? 1 : 0) + (province ? 1 : 0),
         method, high: Boolean(street && province), legalSeat: LEGAL_SEAT.test(context),
         evidence: cleanText(`${fromPreviousLine ? `${lines[i - 1]} · ` : ''}${line}`, 240),
@@ -682,7 +750,7 @@ function composeAddress(parts, score, method, evidence) {
   const place = [cap, city].filter(Boolean).join(' ') + (province ? ` (${province})` : '');
   const address = cap && street.includes(cap) ? street : [street, place].filter(Boolean).join(', ');
   if (!address) return null;
-  return { address, street, cap, city, province, regionText, country: countryOf(parts.country), score, method, high: true, legalSeat: false, evidence };
+  return { address, street, cap, city, locality: localityOf(street), province, regionText, country: countryOf(parts.country), score, method, high: true, legalSeat: false, evidence };
 }
 
 function collectAddresses(ctx, add) {

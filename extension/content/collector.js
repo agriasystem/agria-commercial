@@ -157,7 +157,10 @@ export function collectPageSnapshot(sourceDoc, sourceUrl, mode) {
   }
 
   const addresses = Array.from(doc.querySelectorAll('address'), (el) => clip(textOf(el), 1000)).filter(Boolean).slice(0, 20);
-  const headings = Array.from(doc.querySelectorAll('h1, h2'), (el) => clip(textOf(el).replace(/\s+/g, ' ').trim(), 150)).filter(Boolean).slice(0, 30);
+  const headingsOf = (selector) => Array.from(doc.querySelectorAll(selector), (el) => clip(textOf(el).replace(/\s+/g, ' ').trim(), 150)).filter(Boolean).slice(0, 30);
+  const headings = headingsOf('h1, h2');
+  // h3: solo per riconoscere il marchio e le sezioni dei servizi (non pesano nelle parole di settore)
+  const subheadings = headingsOf('h3');
   const joinText = (els) => clip(els.map(textOf).join('\n'), MAX_TEXT);
   const pageText = textOf(doc.body);
   const titleTag = doc.querySelector('title');
@@ -175,6 +178,7 @@ export function collectPageSnapshot(sourceDoc, sourceUrl, mode) {
     microdata,
     addresses,
     headings,
+    subheadings,
     text: {
       header: joinText(outermost(HEADER)),
       footer: joinText(outermost(FOOTER)),

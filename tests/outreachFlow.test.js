@@ -59,8 +59,8 @@ async function setup({ mode = 'real', operator = MATTEO, company = {}, contact =
   const taskPosts = () => req('POST', /\/tasks$/);
   return { fake, local, session, clock, call, responses, companyId, contactId, setOperator, req, patches, taskPosts };
 }
-const toCompany = (t) => ({ companyId: t.companyId, recipient: { type: 'company', email: 'info@cantinarossi.it' } });
-const toContact = (t) => ({ companyId: t.companyId, recipient: { type: 'contact', contactId: t.contactId } });
+const toCompany = (t) => ({ companyId: t.companyId, sentConfirmed: true, recipient: { type: 'company', email: 'info@cantinarossi.it' } });
+const toContact = (t) => ({ companyId: t.companyId, sentConfirmed: true, recipient: { type: 'contact', contactId: t.contactId } });
 const companyRecord = (t) => t.fake.state.companies.find((c) => c.id === t.companyId).properties;
 
 test('lettura per Outreach: stato e data dell\'Azienda, Contatto, nessuna scrittura', async () => {
@@ -303,7 +303,7 @@ test('stato dell\'operazione in sessione, senza chiamate a HubSpot', async () =>
 
 test('MOCK: stesso flusso simulato, nessuna rete', async () => {
   const t = await setup({ mode: 'mock' });
-  const res = await t.call('outreachConfirm', { companyId: 'MOCK-1001', recipient: { type: 'company' } });
+  const res = await t.call('outreachConfirm', { companyId: 'MOCK-1001', sentConfirmed: true, recipient: { type: 'company' } });
   assert.deepEqual([res.ok, res.outcome, res.mock, res.operation.complete], [true, 'done', true, true]);
   assert.match(res.operation.taskId, /^MOCK-T/);
   assert.equal(t.fake.state.requests.length, 0);
@@ -328,4 +328,56 @@ test('destinatario obbligatorio; Service Key mai nelle risposte né nel registro
   assert.match(text, /Follow-up Programmato per giovedì 15\/10\/2026 alle 14:30 · Matteo Garuzzo/);
   assert.ok(!JSON.stringify(t.responses).includes(TOKEN));
   assert.ok(!JSON.stringify(t.session.data).includes(TOKEN));
+});
+
+// ---- Patch 0.4.1: doppia conferma e destinatari A/CC ----
+
+test('senza la conferma esplicita «ho davvero inviato l\'email» non si scrive nulla', async () => {
+  const t = await setup({ contact: {} });
+  for (const sentConfirmed of [undefined, false, 'true', 1]) {
+    const res = await t.call('outreachConfirm', { ...toCompany(t), sentConfirmed });
+    assert.deepEqual([res.ok, res.error.code, res.error.message], [false, 'invalid_input', "Conferma di aver realmente inviato l'email ai destinatari indicati: nulla è stato registrato."], String(sentConfirmed));
+  }
+  assert.equal(t.fake.writes().length, 0, 'nessuna scrittura in HubSpot');
+  assert.equal((await t.call('outreachState', { companyId: t.companyId })).operation, null, 'nessuna operazione registrata');
+  assert.equal(companyRecord(t).hs_lead_status, 'NEW');
+  // poi la conferma vera: una sola operazione
+  const res = await t.call('outreachConfirm', toCompany(t));
+  assert.deepEqual([res.ok, res.outcome], [true, 'done']);
+  assert.equal(t.patches().length, 1);
+  assert.equal(t.taskPosts().length, 1);
+});
+
+test('destinatari confermati = destinatari registrati (A e CC), HubSpot invariato oltre stato, date e task', async () => {
+  const t = await setup();
+  const cc = ['Prenotazioni@cantinarossi.it', 'vendite@cantinarossi.it', 'prenotazioni@cantinarossi.it', 'info@cantinarossi.it', 'non-email', 7];
+  const res = await t.call('outreachConfirm', { companyId: t.companyId, sentConfirmed: true, recipient: { type: 'company', email: 'INFO@cantinarossi.it', cc } });
+  assert.equal(res.outcome, 'done');
+  assert.deepEqual(res.operation.recipient, { type: 'company', label: 'Azienda — info@cantinarossi.it', to: 'info@cantinarossi.it', cc: ['prenotazioni@cantinarossi.it', 'vendite@cantinarossi.it'] });
+  assert.deepEqual((await t.call('outreachState', { companyId: t.companyId })).operation.recipient.cc, ['prenotazioni@cantinarossi.it', 'vendite@cantinarossi.it'], 'conservati in sessione');
+  // HubSpot: solo Lead Status e data (nessuna proprietà per i CC), un task
+  assert.deepEqual(t.patches().map((r) => Object.keys(r.body.properties).sort()), [['data_del_primo_invio_email', 'hs_lead_status']]);
+  assert.equal(t.taskPosts().length, 1);
+  assert.ok(!JSON.stringify(t.taskPosts()[0].body).includes('vendite@'), 'i CC non finiscono nel task');
+  const audit = (await t.call('audit')).entries.map((e) => e.outcome).join('\n');
+  assert.match(audit, /destinatario: Azienda — info@cantinarossi\.it · CC: prenotazioni@cantinarossi\.it, vendite@cantinarossi\.it/);
+  // senza CC: nessuna riga CC
+  const solo = await setup();
+  const plain = await solo.call('outreachConfirm', toCompany(solo));
+  assert.deepEqual(plain.operation.recipient.cc, []);
+  assert.ok(!(await solo.call('audit')).entries.some((e) => e.outcome.includes('CC:')));
+});
+
+test('doppio clic sulla conferma finale: un solo task; protezione e nuovo controllo dell\'Azienda invariati', async () => {
+  const t = await setup();
+  const confirm = { companyId: t.companyId, sentConfirmed: true, recipient: { type: 'company', email: 'info@cantinarossi.it', cc: ['vendite@cantinarossi.it'] } };
+  const [a, b] = await Promise.all([t.call('outreachConfirm', confirm), t.call('outreachConfirm', confirm)]);
+  assert.deepEqual([a, b].map((r) => (r.ok ? r.outcome : r.error.code)).sort(), ['busy', 'done']);
+  assert.equal(t.patches().length, 1);
+  assert.equal(t.taskPosts().length, 1);
+  // l'Azienda viene riletta prima di scrivere: se nel frattempo risulta contattata, nulla
+  const other = await setup({ company: { data_del_primo_invio_email: '2026-10-12T07:00:00.000Z' } });
+  const blocked = await other.call('outreachConfirm', { ...confirm, companyId: other.companyId });
+  assert.equal(blocked.outcome, 'already');
+  assert.equal(other.fake.writes().length, 0);
 });
