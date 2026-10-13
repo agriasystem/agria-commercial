@@ -202,8 +202,10 @@ test('re-check subito prima della create; payload corretto, campi vuoti omessi, 
   assert.deepEqual(properties, {
     name: 'Cantina Rossi', domain: 'cantinarossi.it', website: 'https://www.cantinarossi.it/', phone: '+39 0742123456',
     email_aziendale_principale: 'info@cantinarossi.it', settore_agria: 'Cantina / Vitivinicolo', city: 'Foligno', state: 'Umbria',
-    country: 'Italia', hs_quick_context: 'WHATSAPP\n+39 333 123 4567', hubspot_owner_id: '99355637', hs_lead_status: 'NEW',
+    hs_quick_context: 'WHATSAPP\n+39 333 123 4567', hubspot_owner_id: '99355637', hs_lead_status: 'NEW',
   });
+  assert.ok(!('country' in properties), 'prospect italiano: country = Italia non si scrive (Patch 0.4.1)');
+  assert.equal(companyPayload({ ...COMPANY, city: 'Lugano', state: 'Ticino', country: 'Svizzera' }, MATTEO).properties.country, 'Svizzera', 'prospect estero: il paese si scrive');
   assert.ok(!('tipo_struttura_hospitality' in properties), 'tipo struttura solo per Hospitality');
   assert.ok(!('email_aziendale_secondaria' in properties) && !('linkedin_company_page' in properties), 'nessuna proprietà vuota');
   assert.deepEqual([res.company.ownerName, res.company.ownerId], ['Matteo Garuzzo', '99355637']);

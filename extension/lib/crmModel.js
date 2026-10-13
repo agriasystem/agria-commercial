@@ -51,7 +51,8 @@ export const COMPANY_PROPS = [
   { name: 'tipo_struttura_hospitality', label: 'Tipo struttura Hospitality', input: 'select', options: TIPO_STRUTTURA_OPTIONS, visibleIf: { settore_agria: 'Hospitality' } },
   { name: 'city', label: 'Città', half: true },
   { name: 'state', label: 'Regione', half: true },
-  { name: 'country', label: 'Paese' },
+  // solo per i prospect esteri (isItalianProspect): per un italiano bastano città e regione
+  { name: 'country', label: 'Paese', visibleIf: (values) => !isItalianProspect(values) },
   { name: 'linkedin_company_page', label: 'Pagina LinkedIn aziendale', check: 'linkedinCompany' },
   { name: 'hubspot_owner_id', label: 'Proprietario HubSpot', input: 'owner' },
   { name: 'hs_lead_status', label: 'Lead status', input: 'fixed' },
@@ -75,7 +76,21 @@ const HIGH_PERSON_METHODS = new Set(['dati strutturati JSON-LD', 'link email', '
 
 /** Il campo va mostrato? (values: valori attuali del form { proprietà: testo }) */
 export function isPropVisible(prop, values = {}) {
+  if (typeof prop.visibleIf === 'function') return prop.visibleIf(values);
   return !prop.visibleIf || Object.entries(prop.visibleIf).every(([name, value]) => values[name] === value);
+}
+
+/**
+ * Prospect italiano, dai valori del form: paese Italia, oppure regione italiana, oppure (senza paese né
+ * regione) dominio .it. Un paese o una regione esteri dicono il contrario. Serve a mostrare il campo
+ * Paese solo per i prospect esteri: per un italiano `country` non si mostra e non si scrive (basta la regione).
+ */
+export function isItalianProspect(values = {}) {
+  const country = normalizeCountry(values.country || '');
+  if (country) return country === 'Italia';
+  const state = String(values.state || '').trim();
+  if (state) return Boolean(normalizeRegion(state));
+  return /\.it$/i.test(String(values.domain || '').trim());
 }
 
 /** Valori del form Contatto → persona, per la regola del Contatto HubSpot. */
@@ -315,12 +330,13 @@ export function proposeCompany(site, { fixed = {} } = {}) {
 
   const emails = factsOf(site, 'email');
   const personEmails = new Set(people.map((p) => p.email).filter(Boolean));
-  const companyEmails = emails.filter((f) => {
+  // caselle dell'azienda: niente PEC, indirizzi di sistema, email delle persone, caselle dell'hosting
+  const candidates = emails.filter((f) => {
     const category = emailCategory(f.value, f.extra);
-    return category !== 'pec' && category !== 'system' && !personEmails.has(f.value);
+    return category !== 'pec' && category !== 'system' && !personEmails.has(f.value) && !isHostingEmail(f.value);
   });
   const allEmails = emails.map((f) => f.value);
-  const free = companyEmails.filter((f) => f.value !== fixed.email_aziendale_principale && f.value !== fixed.email_aziendale_secondaria);
+  const free = candidates.filter((f) => f.value !== fixed.email_aziendale_principale && f.value !== fixed.email_aziendale_secondaria);
   const principal = fixed.email_aziendale_principale ? null : free[0];
   const secondary = free.find((f) => f !== principal) || null;
 
@@ -365,10 +381,14 @@ export const EMAIL_EXCLUSION = Object.freeze({
   noreply: 'indirizzo automatico',
   technical: 'indirizzo tecnico',
   notCommercial: 'amministrativo, legale o tecnico',
-  person: 'email di una persona',
-  provider: 'fornitore esterno (sito web, agenzia)',
+  provider: 'fornitore esterno (sito web, hosting, agenzia)',
   external: "dominio estraneo all'azienda",
 });
+// domini dei servizi di hosting e dei costruttori di siti: le loro caselle non sono mai del prospect
+// (es. info@pietrofl11.sg-host.com, l'indirizzo tecnico di un sito ospitato da SiteGround)
+const HOSTING_DOMAINS = /(^|\.)(sg-host\.com|siteground\.(com|it|net|eu)|hostinger\.[a-z.]+|netsons\.(com|it)|register\.it|aruba\.it|staff\.aruba\.it|serverplan\.com|keliweb\.(it|com)|tophost\.it|altervista\.org|ovh\.[a-z.]+|ionos\.[a-z.]+|1and1\.[a-z.]+|godaddy\.com|secureserver\.net|bluehost\.com|hostgator\.com|dreamhost\.com|namecheap\.com|wpengine\.com|kinsta\.(com|cloud)|cloudways\.com|amazonaws\.com|herokuapp\.com|netlify\.app|vercel\.app|wixsite\.com|wix\.com|squarespace\.com|webflow\.io|jimdo\.com|myshopify\.com)$/;
+/** Casella di un servizio di hosting o di un costruttore di siti (mai un'email dell'azienda). */
+export const isHostingEmail = (email) => HOSTING_DOMAINS.test(String(email).toLowerCase().split('@')[1] || '');
 // caselle di posta gratuite: dell'azienda solo se il nome della casella richiama il prospect
 const FREE_MAIL = /(^|\.)(gmail\.com|googlemail\.com|libero\.it|hotmail\.[a-z.]+|outlook\.[a-z.]+|live\.[a-z.]+|msn\.com|yahoo\.[a-z.]+|ymail\.com|icloud\.com|me\.com|alice\.it|tin\.it|tim\.it|virgilio\.it|tiscali\.it|fastwebnet\.it|email\.it|inwind\.it|iol\.it|katamail\.com|gmx\.[a-z.]+|proton(?:mail)?\.[a-z.]+)$/;
 const PRIVACY_LOCAL = /^(privacy|dpo|gdpr|dataprotection|protezionedati)/;
@@ -398,15 +418,19 @@ function prospectTokens(domain, name) {
  * company: valori del form Azienda ({ name, email_aziendale_principale, email_aziendale_secondaria });
  * edited: proprietà corrette a mano dal commerciale (un indirizzo scelto da lui vale come riconosciuto).
  * → [{ email, role: 'principale' | 'secondaria' | 'altra', usable, reason }] senza doppioni: prima
- * principale e secondaria, poi le altre nell'ordine di Scout. Sempre esclusi: PEC, privacy, indirizzi
- * automatici e tecnici. La principale (l'email dell'Azienda in HubSpot) è esclusa solo se è del
- * fornitore del sito. Secondaria e altre sono escluse anche se amministrative/legali/tecniche, di una
- * persona, del fornitore del sito o di un dominio estraneo al prospect. Un indirizzo corretto a mano
- * nel form vale come riconosciuto (restano solo le esclusioni fisse).
+ * principale e secondaria, poi le altre nell'ordine di Scout.
+ * Sempre esclusi: PEC, privacy, indirizzi automatici e tecnici, caselle dell'hosting.
+ * La principale (l'email dell'Azienda in HubSpot) è esclusa solo se è del fornitore del sito.
+ * Le altre valgono se appartengono davvero al prospect: stesso dominio, casella che richiama il prospect,
+ * oppure email di una persona presentata dal sito con un ruolo nell'azienda. Un indirizzo nominativo
+ * (carolina@cantina.it) vale come gli altri: la prima email resta all'Azienda, le persone sono in copia.
+ * Escluse anche se amministrative/legali/tecniche, del fornitore del sito o di un dominio estraneo.
+ * Un indirizzo corretto a mano nel form vale come riconosciuto (restano solo le esclusioni fisse).
  */
 export function companyEmails(site, company = {}, { edited = [] } = {}) {
   const facts = factsOf(site, 'email');
-  const people = new Set(peopleOf(site).map((p) => normalizeEmail(p.email || '')).filter(Boolean));
+  // persone che il sito presenta con un ruolo nell'azienda (non il «titolare del trattamento»)
+  const staff = new Set(peopleOf(site).filter((p) => p.role && !NOT_A_BUSINESS_ROLE.test(p.role)).map((p) => normalizeEmail(p.email || '')).filter(Boolean));
   const tokens = prospectTokens(site.domain, company.name);
   const belongs = (local, host) => {
     if (sameSite(host, site.domain)) return true;
@@ -421,6 +445,7 @@ export function companyEmails(site, company = {}, { edited = [] } = {}) {
     if (PRIVACY_LOCAL.test(local)) return 'privacy';
     if (NOREPLY_LOCAL.test(local)) return 'noreply';
     if (category === 'system' || TECHNICAL_LOCAL.test(local)) return 'technical';
+    if (HOSTING_DOMAINS.test(host)) return 'provider';
     const field = { principale: 'email_aziendale_principale', secondaria: 'email_aziendale_secondaria' }[role];
     if (field && edited.includes(field)) return ''; // scelto a mano dal commerciale
     // casella che non richiama il prospect, vicino ai crediti del sito: è del fornitore
@@ -428,10 +453,9 @@ export function companyEmails(site, company = {}, { edited = [] } = {}) {
     const provider = !own && fact?.sources.some((s) => PROVIDER_CONTEXT.test(s.evidence || ''));
     if (role === 'principale') return provider ? 'provider' : ''; // l'email principale dell'Azienda in HubSpot
     if (local.split(/[._+-]+|\d+/).some((part) => NOT_COMMERCIAL.has(part))) return 'notCommercial';
-    if (people.has(email) || category === 'personal') return 'person';
     if (provider) return 'provider';
-    if (!own) return 'external';
-    return '';
+    if (own || staff.has(email)) return ''; // del prospect, anche se nominativa
+    return 'external';
   };
   const out = [];
   const push = (raw, role) => {

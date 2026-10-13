@@ -42,11 +42,13 @@ const HOME = analyzeSnapshot({
   text: { header: '', footer: '', page: 'Cantina Rossi: vini, vigneti, vendemmia, degustazioni in cantina.\nMario Rossi – Titolare · mario.rossi@cantinarossi.it\nTel. 0742 123456' },
 }, { pageType: 'home' });
 
-test('registro dei commerciali: i due commerciali Agria, ID owner unici, un solo file da modificare', () => {
-  assert.deepEqual(OPERATORS.map((o) => [o.name, o.hubspotOwnerId]), [
-    ['Matteo Garuzzo', '99355637'],
-    ['Alessandro Poponi', '37994989'],
+test('registro dei commerciali: i due commerciali Agria, ID owner ed email unici, un solo file da modificare', () => {
+  assert.deepEqual(OPERATORS.map((o) => [o.name, o.hubspotOwnerId, o.email]), [
+    ['Matteo Garuzzo', '99355637', 'matteo.garuzzo@agriasystem.com'],
+    ['Alessandro Poponi', '37994989', 'alessandro.poponi@agriasystem.com'],
   ]);
+  assert.ok(OPERATORS.every((o) => /^[a-z0-9._-]+@agriasystem\.com$/.test(o.email)), 'email aziendale Agria (account Gmail)');
+  assert.equal(new Set(OPERATORS.map((o) => o.email)).size, OPERATORS.length, 'email uniche');
   assert.ok(OPERATORS.every((o) => /^\d+$/.test(o.hubspotOwnerId) && o.name.trim()), 'nome e ID owner numerico');
   assert.equal(new Set(OPERATORS.map((o) => o.hubspotOwnerId)).size, OPERATORS.length, 'ID owner unici');
   assert.ok(Object.isFrozen(OPERATORS) && OPERATORS.every(Object.isFrozen), 'non modificabile a runtime');
@@ -56,7 +58,7 @@ test('registro dei commerciali: i due commerciali Agria, ID owner unici, un solo
   const files = fs.readdirSync(ext, { recursive: true }).map(String)
     .filter((f) => /\.(js|html|json|css)$/.test(f) && !f.replace(/\\/g, '/').startsWith('modules/navigator/app/'));
   for (const o of OPERATORS) {
-    for (const value of [o.name, o.hubspotOwnerId]) {
+    for (const value of [o.name, o.hubspotOwnerId, o.email]) {
       const found = files.filter((f) => fs.readFileSync(path.join(ext, f), 'utf8').includes(value)).map((f) => f.replace(/\\/g, '/'));
       assert.deepEqual(found, ['lib/operators.js'], `${value} solo nel registro`);
     }
@@ -66,14 +68,14 @@ test('registro dei commerciali: i due commerciali Agria, ID owner unici, un solo
 test('selezione Matteo: commerciale attivo della sessione', async () => {
   const session = sessionStorage();
   assert.deepEqual(await selectOperator(MATTEO.hubspotOwnerId, session), MATTEO);
-  assert.deepEqual(await loadActiveOperator(session), { name: 'Matteo Garuzzo', hubspotOwnerId: '99355637' });
+  assert.deepEqual(await loadActiveOperator(session), { name: 'Matteo Garuzzo', hubspotOwnerId: '99355637', email: 'matteo.garuzzo@agriasystem.com' });
   assert.deepEqual(session.data, { activeOperator: '99355637' }, 'in sessione solo l\'ID: il resto viene dal registro');
 });
 
 test('selezione Alessandro: commerciale attivo della sessione', async () => {
   const session = sessionStorage();
   assert.deepEqual(await selectOperator(ALESSANDRO.hubspotOwnerId, session), ALESSANDRO);
-  assert.deepEqual(await loadActiveOperator(session), { name: 'Alessandro Poponi', hubspotOwnerId: '37994989' });
+  assert.deepEqual(await loadActiveOperator(session), { name: 'Alessandro Poponi', hubspotOwnerId: '37994989', email: 'alessandro.poponi@agriasystem.com' });
 });
 
 test('cambio commerciale durante la sessione: tutti i pannelli lo ricevono, la bozza non cambia', async () => {

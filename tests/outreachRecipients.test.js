@@ -1,28 +1,105 @@
-// Patch 0.4.1: destinatari della prima email in Outreach. Fonte strutturata companyEmails (dalla bozza di
-// Scout, mai dal testo del Contesto rapido): A = email aziendale principale, CC = secondaria e le altre
-// email aziendali utilizzabili; PEC, privacy, indirizzi tecnici, fornitori e domini estranei esclusi.
+// Destinatari della prima email in Outreach (Patch 0.4.1). La prima email è un'operazione dell'AZIENDA:
+// una sola email aziendale, A = email aziendale principale, CC = tutte le altre email valide del prospect,
+// anche nominative. Fonte strutturata companyEmails (dalla bozza di Scout, mai dal Contesto rapido).
+// Escluse: PEC, privacy/dpo, noreply, indirizzi tecnici, hosting, fornitori del sito, domini estranei.
+// Casi reali riprodotti con dati di prova: Cantina Dionigi (carolina@ in CC), Il Cantico delle Cicale
+// (casella dell'hosting esclusa). Nessun sito reale, nessuna rete.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSnapshot } from '../extension/lib/parser.js';
-import { companyEmails, EMAIL_EXCLUSION } from '../extension/lib/crmModel.js';
+import { companyEmails, EMAIL_EXCLUSION, isHostingEmail, proposeCompany } from '../extension/lib/crmModel.js';
 import { applyFindings, editField, emptyDraft, updateHubspot } from '../extension/lib/draft.js';
-import { cleanCc, outreachProspect, outreachRecipients, recipientOptions } from '../extension/lib/outreach.js';
+import { addPageFindings, emptySite } from '../extension/lib/siteData.js';
+import { cleanCc, outreachProspect, outreachRecipients } from '../extension/lib/outreach.js';
 import { OPERATORS } from '../extension/lib/operators.js';
 
 const [MATTEO] = OPERATORS;
-const ORIGIN = 'https://www.ilpoggio.test';
 const mailto = (email, zone = 'page', text = email) => ({ kind: 'mailto', href: `mailto:${email}`, text, zone });
-const snap = (path, { title = 'Agriturismo Il Poggio', page = '', footer = '', links = [], headings = [] } = {}) => ({
-  url: `${ORIGIN}${path}`, title, meta: {}, jsonld: [], links, resources: [], microdata: [], addresses: [], headings,
+const snap = (url, { title = 'Agriturismo Il Poggio', page = '', footer = '', links = [], headings = [] } = {}) => ({
+  url, title, meta: {}, jsonld: [], links, resources: [], microdata: [], addresses: [], headings,
   text: { header: '', footer, page: [page, footer].filter(Boolean).join('\n') },
 });
+const scanned = (...pages) => pages.reduce((d, p) => applyFindings(d, p).draft, emptyDraft());
+const inHubspot = (draft, name = 'Agriturismo Il Poggio') => updateHubspot(draft, 'real', { company: { id: '9001', name, url: '', createdAt: '', ownerId: MATTEO.hubspotOwnerId, ownerName: MATTEO.name } });
+const values = (draft) => Object.fromEntries(Object.entries(draft.company).map(([k, f]) => [k, f.value]));
+
+// ---- Cantina Dionigi: info@ e carolina@ sullo stesso dominio (footer: «OSPITALITA' … carolina@…») ----
+
+const DIONIGI = 'https://www.cantinadionigi.test';
+const DIONIGI_FOOTER = [
+  'Cantina Dionigi', 'Via Madonna della Pia, 44 06031 Bevagna PG', 'Email:', 'info@cantinadionigi.test',
+  'Mob.: +39 347 0000001 · +39 333 0000002', "OSPITALITA'", '+39 347 0000001', 'carolina@cantinadionigi.test',
+  '© 2022 Cantina Dionigi - Realizzazione Agenzia Web Esempio',
+].join('\n');
+const dionigi = () => analyzeSnapshot(snap(`${DIONIGI}/`, {
+  title: 'Vendita On-line Sagrantino di Montefalco Cantina Dionigi',
+  page: 'Cantina Dionigi: Sagrantino di Montefalco, vini e degustazioni.\n+39 347 0000001 +39 333 0000002\ninfo@cantinadionigi.test',
+  footer: DIONIGI_FOOTER,
+  links: [mailto('info@cantinadionigi.test', 'footer'), mailto('carolina@cantinadionigi.test', 'footer')],
+}), { pageType: 'home' });
+
+test('Cantina Dionigi: info@ in A, carolina@ in CC (nominativa ma dello stesso dominio): una sola email aziendale', () => {
+  const p = outreachProspect(inHubspot(scanned(dionigi()), 'Cantina Dionigi'), 'real');
+  const plan = outreachRecipients(p);
+  assert.deepEqual([plan.type, plan.to, plan.cc, plan.removed], ['company', 'info@cantinadionigi.test', ['carolina@cantinadionigi.test'], []]);
+  assert.deepEqual(p.excluded, [], 'carolina@ non è esclusa perché nominativa');
+  // Togli / Rimetti
+  const off = outreachRecipients(p, ['carolina@cantinadionigi.test']);
+  assert.deepEqual([off.to, off.cc, off.removed], ['info@cantinadionigi.test', [], ['carolina@cantinadionigi.test']]);
+  assert.deepEqual(outreachRecipients(p, []).cc, ['carolina@cantinadionigi.test'], 'rimessa in CC');
+});
+
+test('nessuna regola sul nome: la decisione viene da dominio, fonte e appartenenza al prospect', () => {
+  const site = (footer) => addPageFindings(emptySite(), analyzeSnapshot(snap(`${DIONIGI}/`, { title: 'Cantina Dionigi', footer }), { pageType: 'home' }));
+  const usable = (footer) => companyEmails(site(footer), { name: 'Cantina Dionigi', email_aziendale_principale: 'info@cantinadionigi.test' }).filter((e) => e.usable).map((e) => e.email);
+  // qualunque nome sul dominio del prospect: valido
+  for (const local of ['carolina', 'marco.rossi', 'giulia']) assert.ok(usable(`info@cantinadionigi.test\n${local}@cantinadionigi.test`).includes(`${local}@cantinadionigi.test`), local);
+  // lo stesso nome su un dominio estraneo: no
+  assert.ok(!usable('info@cantinadionigi.test\ncarolina@altrastruttura.test').includes('carolina@altrastruttura.test'));
+  // persona presentata dal sito con un ruolo, casella gratuita: recapito del prospect
+  assert.ok(usable('info@cantinadionigi.test\nTitolare: Carolina Bianchi · carolinabianchi1970@gmail.com').includes('carolinabianchi1970@gmail.com'));
+});
+
+// ---- Il Cantico delle Cicale: la casella dell'hosting (SiteGround) non è del prospect ----
+
+const CICALE = 'https://ilcanticodellecicale.test';
+const cicale = () => analyzeSnapshot(snap(`${CICALE}/`, {
+  title: 'Agriturismo Il Cantico delle Cicale, con ristorante – Alle porte della città di Perugia',
+  headings: ['Il Cantico delle Cicale'],
+  page: 'Modulo di contatto: le richieste arrivano a info@pietrofl11.sg-host.com',
+  footer: 'Strada per Fratticiola Selvatica, 1 | località Piccione | 06134 Perugia IT\ninfo@ilcanticodellecicale.test\nP. Iva 12345678903 | PEC: ilcanticodellecicale@pec.test',
+  links: [mailto('info@ilcanticodellecicale.test', 'footer'), mailto('ilcanticodellecicale@pec.test', 'footer')],
+}), { pageType: 'home' });
+
+test('Il Cantico delle Cicale: info@ valido; casella dell\'hosting e PEC escluse, anche dalle proposte di Scout', () => {
+  const draft = scanned(cicale());
+  assert.equal(draft.company.email_aziendale_principale.value, 'info@ilcanticodellecicale.test');
+  assert.notEqual(draft.company.email_aziendale_secondaria.value, 'info@pietrofl11.sg-host.com', 'l\'hosting non diventa l\'email secondaria');
+  const p = outreachProspect(inHubspot(draft, 'Il Cantico delle Cicale'), 'real');
+  const plan = outreachRecipients(p);
+  assert.deepEqual([plan.to, plan.cc], ['info@ilcanticodellecicale.test', []]);
+  assert.deepEqual([...p.excluded].sort((a, b) => a.email.localeCompare(b.email)), [
+    { email: 'ilcanticodellecicale@pec.test', reason: EMAIL_EXCLUSION.pec },
+    { email: 'info@pietrofl11.sg-host.com', reason: EMAIL_EXCLUSION.provider },
+  ]);
+  for (const email of ['info@pietrofl11.sg-host.com', 'web@x.siteground.it', 'a@b.hostinger.com', 'x@myshop.myshopify.com']) assert.ok(isHostingEmail(email), email);
+  for (const email of ['info@ilcanticodellecicale.test', 'agriturismo@gmail.com']) assert.ok(!isHostingEmail(email), email);
+  // anche scelta a mano, la casella dell'hosting non va in copia
+  const manual = editField(draft, 'company', 'email_aziendale_secondaria', 'info@pietrofl11.sg-host.com');
+  assert.ok(!outreachRecipients(outreachProspect(inHubspot(manual), 'real')).cc.includes('info@pietrofl11.sg-host.com'));
+  assert.ok(!proposeCompany(addPageFindings(emptySite(), cicale())).email_aziendale_secondaria.value.includes('sg-host'));
+});
+
+// ---- regole generali ----
+
+const ORIGIN = 'https://www.ilpoggio.test';
 const FOOTER = 'Agriturismo Il Poggio · Via Roma 1, 06063 Magione (PG) · info@ilpoggio.test\nPEC: ilpoggio@pec.it · Privacy: privacy@ilpoggio.test\nSito realizzato da WebStudio – info@webstudio.test';
-const HOME = analyzeSnapshot(snap('/', {
+const HOME = analyzeSnapshot(snap(`${ORIGIN}/`, {
   page: 'Agriturismo Il Poggio: camere e piscina.\nScrivici: INFO@ilpoggio.test',
   footer: FOOTER,
   links: [mailto('info@ilpoggio.test', 'footer'), mailto('info@webstudio.test', 'footer', 'WebStudio')],
 }), { pageType: 'home' });
-const CONTATTI = analyzeSnapshot(snap('/contatti', {
+const CONTATTI = analyzeSnapshot(snap(`${ORIGIN}/contatti`, {
   page: [
     'Contatti', 'Prenotazioni: prenotazioni@ilpoggio.test', 'Ufficio commerciale: commerciale@ilpoggio.test', 'Sales: sales@ilpoggio.test',
     'Booking: booking@ilpoggio.test', 'Amministrazione: amministrazione@ilpoggio.test', 'Webmaster: webmaster@ilpoggio.test',
@@ -32,99 +109,78 @@ const CONTATTI = analyzeSnapshot(snap('/contatti', {
   footer: FOOTER,
   links: [mailto('prenotazioni@ilpoggio.test'), mailto('commerciale@ilpoggio.test')],
 }), { pageType: 'contact' });
-const scanned = (...pages) => pages.reduce((d, p) => applyFindings(d, p).draft, emptyDraft());
-const inHubspot = (draft) => updateHubspot(draft, 'real', { company: { id: '9001', name: 'Agriturismo Il Poggio', url: '', createdAt: '', ownerId: MATTEO.hubspotOwnerId, ownerName: MATTEO.name } });
-const values = (draft) => Object.fromEntries(Object.entries(draft.company).map(([k, f]) => [k, f.value]));
 
-test('companyEmails: tutte le email aziendali trovate, normalizzate, deduplicate, con l\'esito', () => {
+test('companyEmails: tutte le email trovate, normalizzate, deduplicate, con l\'esito', () => {
   const draft = scanned(HOME, CONTATTI);
   const list = companyEmails(draft.site, values(draft));
   const byEmail = Object.fromEntries(list.map((e) => [e.email, e]));
   assert.equal(list.filter((e) => e.email === 'info@ilpoggio.test').length, 1, 'INFO@ e info@ sono la stessa email');
   assert.deepEqual(list.slice(0, 2).map((e) => [e.email, e.role]), [['info@ilpoggio.test', 'principale'], ['prenotazioni@ilpoggio.test', 'secondaria']]);
-  const usable = list.filter((e) => e.usable).map((e) => e.email).sort();
-  assert.deepEqual(usable, ['agriturismoilpoggio@gmail.com', 'booking@ilpoggio.test', 'commerciale@ilpoggio.test', 'info@ilpoggio.test', 'prenotazioni@ilpoggio.test', 'sales@ilpoggio.test']);
+  assert.deepEqual(list.filter((e) => e.usable).map((e) => e.email).sort(), [
+    'agriturismoilpoggio@gmail.com', 'booking@ilpoggio.test', 'commerciale@ilpoggio.test', 'info@ilpoggio.test', 'maria.rossi@ilpoggio.test',
+    'prenotazioni@ilpoggio.test', 'sales@ilpoggio.test',
+  ]);
   assert.equal(byEmail['ilpoggio@pec.it'].reason, EMAIL_EXCLUSION.pec);
   assert.equal(byEmail['privacy@ilpoggio.test'].reason, EMAIL_EXCLUSION.privacy);
   assert.equal(byEmail['dpo@ilpoggio.test'].reason, EMAIL_EXCLUSION.privacy);
   assert.equal(byEmail['noreply@ilpoggio.test'].reason, EMAIL_EXCLUSION.noreply);
   assert.equal(byEmail['webmaster@ilpoggio.test'].reason, EMAIL_EXCLUSION.technical);
   assert.equal(byEmail['amministrazione@ilpoggio.test'].reason, EMAIL_EXCLUSION.notCommercial);
-  assert.equal(byEmail['maria.rossi@ilpoggio.test'].reason, EMAIL_EXCLUSION.person);
   assert.equal(byEmail['info@webstudio.test'].reason, EMAIL_EXCLUSION.provider);
   assert.equal(byEmail['ordini@cartoleria-rossi.test'].reason, EMAIL_EXCLUSION.external);
+  assert.equal(byEmail['maria.rossi@ilpoggio.test'].usable, true, 'nominativa, dello stesso dominio: valida');
   for (const e of list) assert.equal(e.email, e.email.toLowerCase());
 });
 
-test('Outreach «Azienda»: A = principale, CC = secondaria + altre idonee, nessun doppione', () => {
+test('A = principale, CC = secondaria + altre valide, nessun doppione, A mai in CC', () => {
   const p = outreachProspect(inHubspot(scanned(HOME, CONTATTI)), 'real');
-  const [company] = recipientOptions(p);
-  assert.deepEqual([company.key, company.type, company.label, company.to], ['company', 'company', 'Azienda — info@ilpoggio.test', 'info@ilpoggio.test']);
-  assert.deepEqual([...company.cc].sort(), ['agriturismoilpoggio@gmail.com', 'booking@ilpoggio.test', 'commerciale@ilpoggio.test', 'prenotazioni@ilpoggio.test', 'sales@ilpoggio.test']);
-  assert.equal(company.cc[0], 'prenotazioni@ilpoggio.test', 'prima la secondaria');
-  assert.equal(new Set([company.to, ...company.cc]).size, company.cc.length + 1, 'nessun doppione, A non è in CC');
-  for (const excluded of ['ilpoggio@pec.it', 'privacy@ilpoggio.test', 'dpo@ilpoggio.test', 'webmaster@ilpoggio.test', 'noreply@ilpoggio.test', 'info@webstudio.test', 'ordini@cartoleria-rossi.test', 'amministrazione@ilpoggio.test', 'maria.rossi@ilpoggio.test']) {
-    assert.ok(!company.cc.includes(excluded), `${excluded} non suggerita`);
+  const plan = outreachRecipients(p);
+  assert.deepEqual([plan.type, plan.label, plan.to], ['company', 'Azienda — info@ilpoggio.test', 'info@ilpoggio.test']);
+  assert.equal(plan.cc[0], 'prenotazioni@ilpoggio.test', 'prima la secondaria');
+  assert.deepEqual([...plan.cc].sort(), ['agriturismoilpoggio@gmail.com', 'booking@ilpoggio.test', 'commerciale@ilpoggio.test', 'maria.rossi@ilpoggio.test', 'prenotazioni@ilpoggio.test', 'sales@ilpoggio.test']);
+  assert.equal(new Set([plan.to, ...plan.cc]).size, plan.cc.length + 1);
+  for (const excluded of ['ilpoggio@pec.it', 'privacy@ilpoggio.test', 'dpo@ilpoggio.test', 'webmaster@ilpoggio.test', 'noreply@ilpoggio.test', 'info@webstudio.test', 'ordini@cartoleria-rossi.test', 'amministrazione@ilpoggio.test']) {
+    assert.ok(!plan.cc.includes(excluded), `${excluded} non suggerita`);
     assert.ok(p.excluded.some((e) => e.email === excluded), `${excluded} elencata come non suggerita, col motivo`);
   }
-  const plan = outreachRecipients(p, 'company');
-  assert.deepEqual([plan.type, plan.to, plan.cc, plan.removed], ['company', 'info@ilpoggio.test', company.cc, []]);
 });
 
-test('CC tolto a mano: resta tolto (e si può rimettere); un CC sconosciuto non cambia nulla', () => {
+test('CC tolti a mano: restano tolti (e si possono rimettere); A non si tocca', () => {
   const p = outreachProspect(inHubspot(scanned(HOME, CONTATTI)), 'real');
-  const all = recipientOptions(p)[0].cc;
-  const plan = outreachRecipients(p, 'company', ['sales@ilpoggio.test', 'booking@ilpoggio.test', 'altro@esterno.test']);
+  const all = outreachRecipients(p).cc;
+  const plan = outreachRecipients(p, ['sales@ilpoggio.test', 'booking@ilpoggio.test', 'altro@esterno.test']);
   assert.deepEqual(plan.cc, all.filter((e) => !['sales@ilpoggio.test', 'booking@ilpoggio.test'].includes(e)));
   assert.deepEqual(plan.removed, ['sales@ilpoggio.test', 'booking@ilpoggio.test']);
-  assert.equal(plan.to, 'info@ilpoggio.test', 'A non si tocca');
-  // la stessa scelta, ricalcolata (nuovo disegno della vista, nuova scansione): stessa rimozione
-  const again = outreachRecipients(outreachProspect(inHubspot(scanned(HOME, CONTATTI, CONTATTI)), 'real'), 'company', plan.removed);
-  assert.deepEqual([again.cc, again.removed], [plan.cc, plan.removed]);
-  // rimesso in CC
-  assert.ok(outreachRecipients(p, 'company', ['booking@ilpoggio.test']).cc.includes('sales@ilpoggio.test'));
-  // scelta che non esiste più: niente destinatari
-  assert.equal(outreachRecipients(p, 'company:vecchia@ilpoggio.test'), null);
+  assert.equal(plan.to, 'info@ilpoggio.test');
+  const again = outreachRecipients(outreachProspect(inHubspot(scanned(HOME, CONTATTI, CONTATTI)), 'real'), plan.removed);
+  assert.deepEqual([again.cc, again.removed], [plan.cc, plan.removed], 'stessa scelta dopo una nuova scansione');
+  assert.ok(outreachRecipients(p, ['booking@ilpoggio.test']).cc.includes('sales@ilpoggio.test'), 'rimessa in CC');
 });
 
-test('nessuna email in più: solo A, nessun CC', () => {
-  const only = analyzeSnapshot(snap('/', { footer: 'Agriturismo Il Poggio · info@ilpoggio.test · PEC: ilpoggio@pec.it' }), { pageType: 'home' });
-  const p = outreachProspect(inHubspot(scanned(only)), 'real');
-  const [company] = recipientOptions(p);
-  assert.deepEqual([company.to, company.cc], ['info@ilpoggio.test', []]);
-  assert.deepEqual(outreachRecipients(p, 'company').cc, []);
-  // nessuna email aziendale trovata: l'Azienda resta selezionabile, senza indirizzi inventati
-  const none = outreachProspect(inHubspot(scanned(analyzeSnapshot(snap('/', { footer: 'Agriturismo Il Poggio' }), { pageType: 'home' }))), 'real');
-  assert.deepEqual(recipientOptions(none).map((o) => [o.label, o.to, o.cc]), [['Azienda — email aziendale', '', []]]);
+test('nessuna altra email: solo A, CC vuoto; nessuna email: A vuota, niente inventato', () => {
+  const only = analyzeSnapshot(snap(`${ORIGIN}/`, { footer: 'Agriturismo Il Poggio · info@ilpoggio.test · PEC: ilpoggio@pec.it' }), { pageType: 'home' });
+  const plan = outreachRecipients(outreachProspect(inHubspot(scanned(only)), 'real'));
+  assert.deepEqual([plan.to, plan.cc], ['info@ilpoggio.test', []]);
+  const none = outreachRecipients(outreachProspect(inHubspot(scanned(analyzeSnapshot(snap(`${ORIGIN}/`, { footer: 'Agriturismo Il Poggio' }), { pageType: 'home' }))), 'real'));
+  assert.deepEqual([none.label, none.to, none.cc], ['Azienda', '', []]);
 });
 
-test('scelte a mano del commerciale: valgono come riconosciute (salvo PEC e indirizzi automatici)', () => {
+test('scelte a mano del commerciale: valgono come riconosciute (salvo PEC, indirizzi automatici, hosting)', () => {
   let draft = scanned(HOME, CONTATTI);
-  draft = editField(draft, 'company', 'email_aziendale_secondaria', 'direzione@gruppopoggio.test'); // altro dominio, scelto a mano
-  let p = outreachProspect(inHubspot(draft), 'real');
-  assert.equal(recipientOptions(p)[0].cc[0], 'direzione@gruppopoggio.test');
+  draft = editField(draft, 'company', 'email_aziendale_secondaria', 'direzione@gruppopoggio.test');
+  assert.equal(outreachRecipients(outreachProspect(inHubspot(draft), 'real')).cc[0], 'direzione@gruppopoggio.test');
   draft = editField(draft, 'company', 'email_aziendale_secondaria', 'ilpoggio@pec.it');
-  p = outreachProspect(inHubspot(draft), 'real');
-  assert.ok(!recipientOptions(p)[0].cc.includes('ilpoggio@pec.it'), 'la PEC resta esclusa anche se scelta a mano');
-  // la principale cambiata a mano diventa A
+  assert.ok(!outreachRecipients(outreachProspect(inHubspot(draft), 'real')).cc.includes('ilpoggio@pec.it'));
   draft = editField(draft, 'company', 'email_aziendale_principale', 'Booking@ilpoggio.test');
-  p = outreachProspect(inHubspot(draft), 'real');
-  assert.deepEqual([recipientOptions(p)[0].to, recipientOptions(p)[0].cc.includes('booking@ilpoggio.test')], ['booking@ilpoggio.test', false]);
-});
-
-test('Contatto HubSpot: A = il Contatto, nessun CC suggerito', () => {
-  const draft = updateHubspot(inHubspot(scanned(HOME, CONTATTI)), 'real', { contact: { id: '888', name: 'Maria Rossi', companyId: '9001', associated: true, url: '', createdAt: '' } });
-  const p = outreachProspect(draft, 'real');
-  const contact = recipientOptions(p).at(-1);
-  assert.deepEqual([contact.type, contact.label, contact.to, contact.cc], ['contact', 'Maria Rossi — Titolare', 'maria.rossi@ilpoggio.test', []]);
-  assert.deepEqual(outreachRecipients(p, contact.key), { key: 'contact:888', type: 'contact', contactId: '888', label: 'Maria Rossi — Titolare', to: 'maria.rossi@ilpoggio.test', cc: [], removed: [] });
+  const plan = outreachRecipients(outreachProspect(inHubspot(draft), 'real'));
+  assert.deepEqual([plan.to, plan.cc.includes('booking@ilpoggio.test')], ['booking@ilpoggio.test', false]);
 });
 
 test('casella gratuita del prospect accanto ai crediti del sito: resta del prospect (caso La Mora)', () => {
   const footer = 'Agriturismo La Mora · Via Roma 1, 06081 Assisi (PG) · +39 393 4363917 agriturismolamora@gmail.com\nSito realizzato da Studio Web Esempio S.r.l. – info@studiowebesempio.test';
-  const f = analyzeSnapshot({ ...snap('/', { title: 'Agriturismo La Mora', footer }), url: 'https://lamora-caso.test/' }, { pageType: 'home' });
+  const f = analyzeSnapshot(snap('https://lamora-caso.test/', { title: 'Agriturismo La Mora', footer }), { pageType: 'home' });
   const p = outreachProspect(inHubspot(scanned(f)), 'real');
-  assert.deepEqual([recipientOptions(p)[0].to, recipientOptions(p)[0].cc], ['agriturismolamora@gmail.com', []]);
+  assert.deepEqual([outreachRecipients(p).to, outreachRecipients(p).cc], ['agriturismolamora@gmail.com', []]);
   assert.deepEqual(p.excluded, [{ email: 'info@studiowebesempio.test', reason: EMAIL_EXCLUSION.provider }]);
 });
 

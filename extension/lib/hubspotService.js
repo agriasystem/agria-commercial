@@ -8,6 +8,7 @@
 // Storage
 //   chrome.storage.local    hubspotServiceKey (la chiave; mai storage.sync)
 //                           hubspotConnection (esito dell'ultimo «Testa connessione», nessun segreto)
+//                           dailyOutreachCounts (contatore «Oggi», per commerciale e giorno: lib/dailyOutreach.js)
 //   chrome.storage.session  hubspotAudit (ultimi eventi), hubspotSession (verifiche, record creati e
 //                           operazioni Outreach di questa sessione: servono al controllo dei doppioni,
 //                           ai nuovi tentativi e a non ripetere mai un primo contatto già registrato)
@@ -25,6 +26,7 @@ import {
   remainingCompanyProperties, sameDateValue,
 } from './outreach.js';
 import { formatDue } from './outreachTime.js';
+import { createDailyCounter } from './dailyOutreach.js';
 
 export { AUDIT_ITEM, MESSAGE, STATUS_CHANGED } from './hubspotMessages.js';
 
@@ -93,6 +95,7 @@ export function createHubspotService({
 } = {}) {
   const locks = new Set();
   let sessionQueue = Promise.resolve();
+  const counter = createDailyCounter({ local, now }); // «Oggi 7 / 20», in chrome.storage.local
   const properties = new Map(); // definizioni delle proprietà del portale già lette (tipo, valori ammessi)
 
   const readKey = async () => {
@@ -260,6 +263,9 @@ export function createHubspotService({
       op.steps.company = 'done';
       delete op.errors.company;
       await saveOperation(mode, op);
+      // contatore «Oggi»: +1 ora, una volta sola per Azienda e giorno, anche se poi il task fallisce.
+      // In MOCK nulla è registrato davvero: non conta.
+      if (!mock) await counter.record(op.ownerId, op.companyId, op.confirmedAt).catch(() => {});
       const dateNote = op.writes.companyDate ? 'data del primo invio registrata' : 'data del primo invio già presente, invariata';
       const ccNote = op.recipient.cc?.length ? ` · CC: ${op.recipient.cc.join(', ')}` : '';
       await audit({ operation: 'Primo contatto', company: op.companyName, recordId: op.companyId, outcome: `Lead Status: Primo contatto inviato · ${dateNote} · destinatario: ${op.recipient.label}${ccNote}`, mock });
@@ -596,6 +602,21 @@ export function createHubspotService({
         await audit({ operation: 'Primo invio al Contatto', company: company.name, recordId: cid, outcome: `Data registrata · ${personLabel(contact.name, contact.jobtitle)}`, mock });
         return { outcome: 'done', contact: { ...contact, firstEmailAt: value }, mock };
       });
+    },
+
+    // ---- contatore giornaliero del commerciale attivo (lib/dailyOutreach.js) ----
+
+    /** «Oggi N / 20» per il commerciale attivo, nel giorno italiano di adesso. */
+    async dailyCount() {
+      const operator = await operatorOrFail();
+      return counter.state(operator.hubspotOwnerId);
+    },
+
+    /** Correzione a mano: delta +1 o −1, mai sotto zero. */
+    async dailyCountAdjust({ delta }) {
+      const operator = await operatorOrFail();
+      if (delta !== 1 && delta !== -1) throw new HubspotError('invalid_input', 'Correzione non valida.');
+      return counter.adjust(operator.hubspotOwnerId, delta);
     },
 
     // nuovo tentativo di associazione, solo per un contatto creato da Scout in questa sessione

@@ -120,15 +120,16 @@ test('Outreach, Azienda già contattata: nessuna azione «Registra email inviata
   assert.match(read('lib/hubspotService.js'), /async outreachContactDate\(\{ companyId, contactId \}\)/);
 });
 
-test('Outreach, Azienda non contattata: destinatari A/CC, «Ho inviato l\'email», verifica, conferma (Patch 0.4.1)', () => {
+test("Outreach, Azienda non contattata: Invia da, A/CC, email pronta in Gmail, «Ho inviato l'email», verifica, conferma", () => {
   const panel = read('modules/outreach/outreachPanel.js');
   for (const text of [
-    'Destinatari prima email', 'A:', 'CC:', 'Invia ora la prima email dal tuo account aziendale.', 'Ho inviato l\'email',
+    'Invia da', 'Destinatari prima email', 'A:', 'CC:', 'Togli', 'Rimetti', 'Email di primo contatto', 'Oggetto: ',
+    'Apri email pronta in Gmail', 'Dopo averla inviata da Gmail, torna qui.', "Ho inviato l'email",
     'Verifica prima di registrare il contatto', 'Confermando, Agria Commercial registrerà il primo contatto in HubSpot e programmerà il follow-up.',
-    'Confermo di aver realmente inviato l\'email ai destinatari indicati.', 'Conferma invio e crea follow-up', 'Indietro', 'Cosa succederà',
+    "Confermo di aver realmente inviato l'email ai destinatari indicati.", 'Conferma invio e crea follow-up', 'Indietro', 'Cosa succederà',
     'Riprova creazione follow-up',
   ]) assert.ok(panel.includes(text), text);
-  assert.ok(!panel.includes('Conferma email inviata e crea follow-up'), 'il vecchio pulsante a un clic non c\'è più');
+  assert.ok(!panel.includes('Conferma email inviata e crea follow-up'), "il vecchio pulsante a un clic non c'è più");
   for (const action of ['outreachRead', 'outreachConfirm', 'outreachRetry']) assert.match(panel, new RegExp(`call\\('${action}'`), action);
   // l'unica chiamata che scrive parte dal pulsante finale, con la conferma esplicita e i destinatari verificati
   const code = panel.replace(/^\s*\/\/.*$/gm, '');
@@ -136,11 +137,20 @@ test('Outreach, Azienda non contattata: destinatari A/CC, «Ho inviato l\'email�
   const confirm = code.slice(code.indexOf('async function onConfirm('), code.indexOf('async function onRetry('));
   assert.match(confirm, /if \(!p \|\| !plan \|\| !sentChecked \|\| busy\) return;/);
   assert.match(confirm, /sentConfirmed: true/);
-  assert.match(confirm, /recipient: \{ type: plan\.type, contactId: plan\.contactId, email: plan\.to, cc: \[\.\.\.plan\.cc\] \}/);
-  for (const fn of ['onSent', 'onBack']) {
+  assert.match(confirm, /recipient: \{ type: 'company', email: plan\.to, cc: \[\.\.\.plan\.cc\] \}/, "la prima email è sempre dell'Azienda");
+  for (const fn of ['onOpenGmail', 'onSent', 'onBack']) {
     const body = panel.match(new RegExp(String.raw`function ${fn}\(\) \{[\s\S]*?\r?\n  \}\r?\n`))?.[0] || '';
-    assert.ok(body.includes('pending'), `${fn}: corpo trovato`);
-    assert.ok(!/call\(|sendMessage/.test(body), `${fn}: nessuna chiamata al service worker`);
+    assert.ok(body.length > 0, `${fn}: corpo trovato`);
+    assert.ok(!/call\(|sendMessage|outreachConfirm|dailyCount/.test(body), `${fn}: nessuna chiamata al service worker (nessuna scrittura, nessun conteggio)`);
+  }
+  // Gmail: URL da lib/gmail.js con l'account del commerciale attivo e il testo di config/outreachTemplates.js
+  const gmail = panel.match(/function onOpenGmail\(\) \{[\s\S]*?\r?\n  \}\r?\n/)[0];
+  assert.match(gmail, /gmailComposeUrl\(\{ account: operator\.email, to: plan\.to, cc: plan\.cc, subject: mail\.subject, body: mail\.body \}\)/);
+  assert.match(gmail, /chrome\.tabs\.create\(\{ url, active: true \}\)/);
+  // nessun indirizzo email scritto nel modulo Outreach né nella sua logica: vengono dal registro e dalla bozza
+  for (const file of ['modules/outreach/outreachPanel.js', 'modules/outreach/outreach.js', 'lib/outreach.js', 'lib/gmail.js', 'config/outreachTemplates.js']) {
+    const source = read(file).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''); // i commenti possono fare esempi
+    assert.ok(!/[\w.+-]+@[\w-]+\.[a-z]{2,}/i.test(source), `${file}: email scritta nel codice`);
   }
 });
 

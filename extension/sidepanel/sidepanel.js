@@ -25,6 +25,7 @@ import { nextStep as computeNextStep } from '../lib/nextStep.js';
 import { createOutreachPanel } from '../modules/outreach/outreachPanel.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
 import { RETURN_ITEM as SETTINGS_RETURN_ITEM } from '../options/backToAgria.js';
+import { createDailyCounterBar } from './dailyCounter.js';
 import {
   allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
 } from './render.js';
@@ -56,6 +57,7 @@ let scanController = null;
 let hub = null; // sezione HubSpot (hubspotPanel.js)
 let shell = null; // navigazione fra i moduli (shell/shell.js)
 let outreach = null; // vista Outreach (modules/outreach/outreachPanel.js)
+let counterBar = null; // contatore «Oggi N / 20» in fondo al pannello (dailyCounter.js)
 let saveTimer = null;
 let clearTimer = null;
 
@@ -261,6 +263,10 @@ function afterEdit(section, name, { rerender = true } = {}) {
   const prop = PROPS[section].find((p) => p.name === name);
   if (rerender) renderField(section, prop);
   if (name === 'settore_agria') renderField('company', PROPS.company.find((p) => p.name === 'tipo_struttura_hospitality'));
+  // campi condizionali (Paese: solo per un prospect estero) seguono gli altri valori; mai quello che si sta scrivendo
+  if (section === 'company') {
+    for (const p of PROPS.company) if (p.visibleIf && p.name !== name) $(`#company-${p.name}-field`).hidden = !isPropVisible(p, valuesOf(draft.company));
+  }
   renderField('company', PROPS.company.find((p) => p.name === 'hs_quick_context'));
   if (section === 'contact') renderReadiness();
   if (section === 'company' && DUPLICATE_KEYS.has(name)) hub.dataChanged();
@@ -441,6 +447,7 @@ function showPicker(open) {
   $('#app').hidden = picking;
   $('#module-nav').hidden = picking;
   $('#operator-cancel').hidden = !operator;
+  $('#daily-counter').hidden = picking;
   $('#operator-error').textContent = '';
   for (const b of document.querySelectorAll('#operator-list .operator')) b.setAttribute('aria-current', String(b.dataset.ownerId === operator?.hubspotOwnerId));
 }
@@ -452,6 +459,8 @@ function applyOperator(next) {
   for (const [section, props] of Object.entries(PROPS)) for (const prop of props) if (prop.input === 'owner') renderOwner(section, prop);
   showPicker(false);
   hub.render(); // l'anteprima HubSpot mostra il nuovo proprietario
+  outreach.render(); // «Invia da», testo dell'email e account Gmail del nuovo commerciale
+  counterBar.refresh(); // il contatore è del commerciale attivo
   refreshHome();
   refreshSessionLegalBasis(); // la base predefinita vale solo per il commerciale che l'ha confermata
 }
@@ -539,14 +548,18 @@ async function init() {
     onChange: () => {
       renderHandoff();
       refreshHome();
+      counterBar.refresh(); // un primo contatto registrato conta subito
     },
   });
+  counterBar = createDailyCounterBar({ $, getOperator: () => operator });
+  counterBar.init();
   buildSessionLegalBasis();
   shell = createShell({
     $,
     nextStep,
     onView: (view) => {
       hub.render();
+      counterBar.refresh();
       if (view === 'outreach') outreach.show();
       else outreach.hide();
     },

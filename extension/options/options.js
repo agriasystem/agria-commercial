@@ -92,7 +92,10 @@ function renderOperators(active) {
     const id = document.createElement('span');
     id.className = 'operator-id';
     id.textContent = `Owner ID ${o.hubspotOwnerId}`;
-    li.append(name, id);
+    const email = document.createElement('span');
+    email.className = 'operator-id';
+    email.textContent = o.email || 'email non indicata';
+    li.append(name, id, email);
     if (o.hubspotOwnerId === active?.hubspotOwnerId) {
       const chip = document.createElement('span');
       chip.className = 'chip high';

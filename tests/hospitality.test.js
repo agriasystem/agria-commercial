@@ -87,7 +87,7 @@ test('Il Cantico delle Cicale: ristorante proprio da prove forti → «Struttura
   // nel payload HubSpot
   const { draft } = applyFindings(emptyDraft(), cicaleHome());
   const record = crmRecords(draft, MATTEO).company;
-  assert.deepEqual([record.name, record.settore_agria, record.tipo_struttura_hospitality, record.city, record.state, record.country], ['Il Cantico delle Cicale', 'Hospitality', 'Struttura con ristorante', 'Perugia', 'Umbria', '']);
+  assert.deepEqual([record.name, record.settore_agria, record.tipo_struttura_hospitality, record.city, record.state, 'country' in record], ['Il Cantico delle Cicale', 'Hospitality', 'Struttura con ristorante', 'Perugia', 'Umbria', false]);
   // scelta a mano: resta
   const manual = editField(draft, 'company', 'tipo_struttura_hospitality', 'Agriturismo');
   assert.equal(applyFindings(manual, cicaleRistorante()).draft.company.tipo_struttura_hospitality.value, 'Agriturismo');

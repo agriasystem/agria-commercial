@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeSnapshot } from '../extension/lib/parser.js';
 import { addPageFindings, emptySite, factsOf } from '../extension/lib/siteData.js';
-import { proposeCompany } from '../extension/lib/crmModel.js';
+import { COMPANY_PROPS, isItalianProspect, isPropVisible, proposeCompany } from '../extension/lib/crmModel.js';
 import { applyFindings, crmRecords, emptyDraft, preflightCompany } from '../extension/lib/draft.js';
 import { companyPayload } from '../extension/lib/hubspotPayload.js';
 import { comuneFromCap } from '../extension/lib/italy.js';
@@ -109,4 +109,43 @@ test('regressioni: Magione, Montefalco, Assisi, Foligno + PG → Umbria; Siena �
     const p = place(findings(page));
     assert.deepEqual([p.city, p.state, p.country], [city, state, ''], page);
   }
+});
+
+// ---- campo Paese: solo per i prospect esteri (visualizzazione condizionale, `country` resta nel modello) ----
+
+const countryProp = COMPANY_PROPS.find((p) => p.name === 'country');
+const countryShown = (draft) => isPropVisible(countryProp, Object.fromEntries(Object.entries(draft.company).map(([k, f]) => [k, f.value])));
+
+test('Paese: nascosto per un prospect italiano (La Locanda dei Golosi, Il Cantico delle Cicale), mostrato per un estero', () => {
+  const locanda = applyFindings(emptyDraft(), findings(LOCANDA_HOME)).draft;
+  assert.deepEqual([locanda.company.city.value, locanda.company.state.value, countryShown(locanda)], ['Perugia', 'Umbria', false]);
+  const cicale = applyFindings(emptyDraft(), analyzeSnapshot(snap('https://ilcanticodellecicale.test/', {
+    title: 'Agriturismo Il Cantico delle Cicale, con ristorante', footer: 'Strada per Fratticiola Selvatica, 1 | località Piccione | 06134 Perugia IT',
+  }), { pageType: 'home' })).draft;
+  assert.deepEqual([cicale.company.state.value, countryShown(cicale)], ['Umbria', false]);
+  assert.ok(!('country' in crmRecords(cicale, MATTEO).company), 'campo nascosto: non va nel record');
+  const swiss = applyFindings(emptyDraft(), findings('', { jsonld: [{ '@type': 'Hotel', name: 'Albergo Lago', address: { streetAddress: 'Via Lago 1', postalCode: '6900', addressLocality: 'Lugano', addressRegion: 'Ticino', addressCountry: 'Svizzera' } }] })).draft;
+  assert.deepEqual([swiss.company.country.value, countryShown(swiss)], ['Svizzera', true]);
+  assert.equal(companyPayload(crmRecords(swiss, MATTEO).company, MATTEO).properties.country, 'Svizzera', 'estero: il Paese si scrive');
+});
+
+test('riconoscimento del prospect italiano dai valori del form: paese, regione, dominio .it', () => {
+  const cases = [
+    [{ state: 'Umbria' }, true],
+    [{ state: 'Lombardia', domain: 'cantina.com' }, true],
+    [{ country: 'Italia' }, true],
+    [{ country: 'ITALY', state: '' }, true],
+    [{ domain: 'agriturismo.it' }, true],
+    [{ country: 'Svizzera', state: 'Ticino' }, false],
+    [{ state: 'Bayern', domain: 'weingut.de' }, false],
+    [{ domain: 'winery.com' }, false],
+    [{ country: 'Francia', state: 'Umbria' }, false],
+  ];
+  for (const [values, italian] of cases) {
+    assert.equal(isItalianProspect(values), italian, JSON.stringify(values));
+    assert.equal(isPropVisible(countryProp, values), !italian, JSON.stringify(values));
+  }
+  // «Italia» scritto a mano per un prospect italiano: campo nascosto, non si invia
+  const record = { name: 'X', domain: 'x.it', city: 'Perugia', state: 'Umbria', country: 'Italia' };
+  assert.ok(!('country' in companyPayload(record, MATTEO).properties));
 });

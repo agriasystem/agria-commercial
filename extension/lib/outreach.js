@@ -82,36 +82,20 @@ export function outreachProspect(draft, mode) {
 }
 
 /**
- * Destinatari possibili della prima email: l'Azienda (A: email aziendale principale; CC suggeriti:
- * secondaria e le altre email aziendali utilizzabili) e il Contatto HubSpot, se c'è. Il commerciale ne
- * sceglie uno; nessuna scelta predefinita. → [{ key, type, contactId?, email, label, to, cc }]
+ * Destinatari della prima email. È un'operazione dell'AZIENDA: una sola email aziendale, A = l'email
+ * aziendale principale, CC = tutte le altre email valide del prospect (secondaria, booking@, anche
+ * nominative come carolina@azienda.it) tranne quelle tolte a mano (removed). Una persona in CC non rende
+ * l'email «al Contatto»: niente data del Contatto, follow-up solo sull'Azienda.
+ * È quello che la verifica mostra, che Gmail riceve e che il service worker registra, identico.
+ * → { type: 'company', label, to, cc: [CC rimasti], removed: [CC tolti] } | null senza prospect
  */
-export function recipientOptions(prospect) {
-  if (!prospect) return [];
-  const [main, ...others] = prospect.emails.map((e) => e.email);
-  const company = {
-    key: 'company', type: 'company', email: main || '', label: main ? `Azienda — ${main}` : 'Azienda — email aziendale',
-    to: main || '', cc: others,
-  };
-  const c = prospect.contact;
-  const contact = c
-    ? [{ key: `contact:${c.id}`, type: 'contact', contactId: c.id, email: c.email || '', label: personLabel(c.name || 'Contatto', c.jobtitle), to: c.email || '', cc: [] }]
-    : [];
-  return [company, ...contact];
-}
-
-/**
- * Destinatari da confermare per la scelta fatta (key) senza i CC tolti a mano (removed): quello che la
- * verifica mostra e che il service worker registra, identico. null se la scelta non c'è più.
- * → { key, type, contactId, label, to, cc: [CC rimasti], removed: [CC tolti] }
- */
-export function outreachRecipients(prospect, key, removed = []) {
-  const option = recipientOptions(prospect).find((o) => o.key === key);
-  if (!option) return null;
+export function outreachRecipients(prospect, removed = []) {
+  if (!prospect) return null;
+  const [to = '', ...others] = prospect.emails.map((e) => e.email);
   const off = new Set(removed);
   return {
-    key: option.key, type: option.type, contactId: option.contactId || '', label: option.label, to: option.to,
-    cc: option.cc.filter((e) => !off.has(e) && e !== option.to), removed: option.cc.filter((e) => off.has(e)),
+    type: 'company', label: to ? `Azienda — ${to}` : 'Azienda',
+    to, cc: others.filter((e) => !off.has(e)), removed: others.filter((e) => off.has(e)),
   };
 }
 

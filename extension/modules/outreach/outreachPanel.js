@@ -1,42 +1,51 @@
 // Vista Outreach del pannello: primo contatto e primo follow-up del prospect che Scout ha portato in
-// HubSpot. Il commerciale sceglie i destinatari (Azienda: A = email principale, CC = le altre email
-// aziendali utilizzabili, ciascuna si può togliere; oppure il Contatto HubSpot), invia la prima email
-// dal suo account aziendale (Agria Commercial non invia e non legge email) e la registra in due passi:
-//   1. «Ho inviato l'email»  → nessuna scrittura: si fissano i destinatari e si apre la verifica;
-//   2. verifica con A/CC, casella obbligatoria «Confermo di aver realmente inviato…», poi
+// HubSpot. La prima email è un'operazione dell'AZIENDA: una sola email aziendale, A = email aziendale
+// principale, CC = le altre email valide del prospect (anche nominative), ciascuna si toglie e si rimette.
+//   1. «Apri email pronta in Gmail»: nuova scheda di Gmail con l'account del commerciale attivo,
+//      destinatari, oggetto e testo già compilati (config/outreachTemplates.js). Nessuna scrittura.
+//   2. il commerciale controlla e invia DA GMAIL, poi torna qui: «Ho inviato l'email» (nessuna scrittura,
+//      si fissano i destinatari e si apre la verifica);
+//   3. verifica con A/CC, casella obbligatoria «Confermo di aver realmente inviato…», poi
 //      «Conferma invio e crea follow-up» (l'unico clic che scrive) oppure «Indietro».
-// Il service worker aggiorna HubSpot e crea il follow-up. Il prospect viene dalla bozza di Scout;
-// l'operazione vive nel service worker (sessione di Chrome). Qui c'è solo l'ultima risposta ricevuta.
+// Agria Commercial non invia e non legge email: non può sapere se Gmail ha davvero inviato.
+// Il service worker aggiorna HubSpot e crea il follow-up (solo sull'Azienda: una persona in CC non rende
+// l'email «al Contatto»). Il prospect viene dalla bozza di Scout; l'operazione vive nel service worker
+// (sessione di Chrome). Qui c'è solo l'ultima risposta ricevuta.
 // Un'Azienda già contattata si mostra soltanto: nessuna azione di primo contatto, nemmeno la sola
 // data del Contatto (l'azione outreachContactDate del service worker resta, non esposta).
 
 import { el } from '../../ui/dom.js';
 import { feedback } from '../../ui/feedback.js';
 import { MESSAGE } from '../../lib/hubspotMessages.js';
-import { outreachProspect, outreachRecipients, recipientOptions, statusLabel } from '../../lib/outreach.js';
+import { outreachProspect, outreachRecipients, statusLabel } from '../../lib/outreach.js';
 import { followUpSchedule, formatDue, formatHubspotDate, formatRomeDateTime } from '../../lib/outreachTime.js';
+import { gmailComposeUrl } from '../../lib/gmail.js';
+import { firstContactEmail } from '../../config/outreachTemplates.js';
 import { openNavigator } from '../navigator/navigator.js';
 import { OUTREACH } from './outreach.js';
 
 const UNAVAILABLE = { ok: false, error: { code: 'unavailable', message: 'Il servizio HubSpot di Agria Commercial non risponde: chiudi e riapri il pannello.' } };
 const SESSION_ITEM = 'hubspotSession';
-const CHOICE_ITEM = 'outreachChoice'; // { key, choice, removed }: solo la scelta del destinatario, nessun dato HubSpot
+// { key, removed, gmailBy }: CC tolti a mano e chi ha aperto Gmail per questa Azienda; nessun dato HubSpot
+const CHOICE_ITEM = 'outreachChoice';
 const lines = (text) => String(text || '').split('\n').filter(Boolean).map((l) => el('p', {}, l));
 const link = (url, text) => (/^https:\/\//.test(url || '') ? el('a', { class: 'src', href: url, target: '_blank', rel: 'noopener noreferrer' }, text) : null);
 const withId = (id, node) => Object.assign(node, { id });
+const sectionTitle = (id, text) => el('h3', { id, class: 'outreach-step-title' }, text);
 
 /**
- * getDraft: bozza di Scout; getOperator: commerciale attivo; getHubspot: () => { mode, ready, blocker }
- * (dal pannello HubSpot di Scout); onNavigate(view): apre un'altra vista; onChange(): l'esito di
- * Outreach è cambiato (Prossimo passo da ridisegnare).
+ * getDraft: bozza di Scout; getOperator: commerciale attivo (registro dei commerciali); getHubspot:
+ * () => { mode, ready, blocker } (dal pannello HubSpot di Scout); onNavigate(view): apre un'altra vista;
+ * onChange(): l'esito di Outreach è cambiato (Prossimo passo e contatore da ridisegnare).
  */
 export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNavigate, onChange = () => {} }) {
   let key = ''; // modalità + Azienda a cui si riferisce l'ultima risposta
   let info = null; // { company, contact, contacted, operation, mock } dall'ultima risposta del service worker
   let busy = ''; // '' | 'read' | 'confirm' | 'retry'
   let error = null; // ultimo errore { code, message }
-  let choice = ''; // destinatario scelto (chiave di recipientOptions)
   let removed = []; // CC suggeriti tolti a mano
+  let gmailBy = ''; // ID owner del commerciale che ha aperto Gmail per questa Azienda (in questa sessione)
+  let touched = false; // scelte fatte prima che arrivassero quelle salvate: vincono queste
   let pending = null; // destinatari fissati con «Ho inviato l'email»: passo di verifica aperto
   let sentChecked = false; // «Confermo di aver realmente inviato l'email…», sempre vuota all'apertura della verifica
   let visible = false;
@@ -45,14 +54,17 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
   const call = (action, payload = {}) => chrome.runtime.sendMessage({ type: MESSAGE, action, ...payload }).then((r) => r || UNAVAILABLE, () => UNAVAILABLE);
   const prospect = () => (getOperator() ? outreachProspect(getDraft(), getHubspot().mode) : null);
   const keyOf = (p) => (p ? `${getHubspot().mode}:${p.companyId}` : '');
+  const gmailOpened = () => Boolean(gmailBy) && gmailBy === getOperator()?.hubspotOwnerId;
+  // il nome dell'Azienda come lo mostra Outreach (HubSpot, altrimenti la bozza di Scout)
+  const companyName = (p) => info?.company?.name || p?.name || '';
 
-  // scelta del destinatario e CC tolti: restano nella sessione di Chrome (anche chiudendo il pannello)
-  const saveChoice = () => chrome.storage.session.set({ [CHOICE_ITEM]: { key, choice, removed } }).catch(() => {});
+  // CC tolti e apertura di Gmail: restano nella sessione di Chrome (anche cambiando vista o chiudendo il pannello)
+  const saveChoice = () => chrome.storage.session.set({ [CHOICE_ITEM]: { key, removed, gmailBy } }).catch(() => {});
   async function loadChoice(asked) {
     const saved = (await chrome.storage.session.get(CHOICE_ITEM).catch(() => ({})))[CHOICE_ITEM];
-    if (asked !== key || saved?.key !== key || choice) return;
-    choice = typeof saved.choice === 'string' ? saved.choice : '';
+    if (asked !== key || saved?.key !== key || touched) return;
     removed = Array.isArray(saved.removed) ? saved.removed.filter((e) => typeof e === 'string') : [];
+    gmailBy = typeof saved.gmailBy === 'string' ? saved.gmailBy : '';
     render();
   }
 
@@ -64,8 +76,9 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
       key = next;
       info = null;
       error = null;
-      choice = '';
       removed = [];
+      gmailBy = '';
+      touched = false;
       pending = null;
       sentChecked = false;
       if (p) loadChoice(next);
@@ -90,7 +103,7 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     const asked = keyOf(p);
     busy = 'read';
     render();
-    const res = await call('outreachRead', { companyId: p.companyId, contactId: p.contact?.id || '' });
+    const res = await call('outreachRead', { companyId: p.companyId });
     busy = '';
     if (asked === key) {
       if (res.ok) {
@@ -102,9 +115,34 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     onChange();
   }
 
+  // email di primo contatto per l'Azienda e il commerciale attivo → { subject, body } | { error }
+  function email(p) {
+    try {
+      return firstContactEmail({ operator: getOperator(), companyName: companyName(p) });
+    } catch (err) {
+      return { error: err.message };
+    }
+  }
+
+  // «Apri email pronta in Gmail»: una nuova scheda; il pannello resta aperto. Nessuna scrittura, nessun conteggio.
+  function onOpenGmail() {
+    const p = prospect();
+    const operator = getOperator();
+    const plan = outreachRecipients(p, removed);
+    const mail = email(p);
+    if (!p || !plan?.to || mail.error || !operator?.email || busy) return;
+    const url = gmailComposeUrl({ account: operator.email, to: plan.to, cc: plan.cc, subject: mail.subject, body: mail.body });
+    chrome.tabs.create({ url, active: true }).catch(() => {});
+    gmailBy = operator.hubspotOwnerId;
+    touched = true;
+    saveChoice();
+    render();
+    $('#outreach-sent')?.focus();
+  }
+
   // «Ho inviato l'email»: nessuna scrittura, si fissano i destinatari e si apre la verifica
   function onSent() {
-    const plan = outreachRecipients(prospect(), choice, removed);
+    const plan = outreachRecipients(prospect(), removed);
     if (!plan || busy) return;
     pending = plan;
     sentChecked = false;
@@ -133,7 +171,7 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     render();
     const res = await call('outreachConfirm', {
       companyId: p.companyId, sentConfirmed: true,
-      recipient: { type: plan.type, contactId: plan.contactId, email: plan.to, cc: [...plan.cc] },
+      recipient: { type: 'company', email: plan.to, cc: [...plan.cc] },
     });
     busy = '';
     if (!res.ok) error = res.error;
@@ -189,52 +227,69 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
       el('dt', {}, 'Stato'), el('dd', { id: 'outreach-status' }, company ? statusLabel(company.leadStatus) : busy === 'read' ? 'Lettura da HubSpot…' : '—'));
   }
 
-  // A e CC (contact: il Contatto HubSpot). editable: i CC suggeriti si possono togliere e rimettere
+  // A e CC. editable: i CC si possono togliere e rimettere
   function recipientLines(plan, { editable = false } = {}) {
-    const ccItems = plan.cc.map((email) => el('li', { class: 'rcpt' },
-      el('span', { class: 'rcpt-email' }, email),
+    const ccItems = plan.cc.map((address) => el('li', { class: 'rcpt' },
+      el('span', { class: 'rcpt-email' }, address),
       editable ? el('button', {
-        class: 'linkbtn', type: 'button', 'aria-label': `Togli ${email} dal CC`, disabled: Boolean(busy),
-        onclick: () => { removed = [...removed, email]; saveChoice(); render(); $('#outreach-sent')?.focus(); },
+        class: 'linkbtn', type: 'button', 'aria-label': `Togli ${address} dal CC`, disabled: Boolean(busy),
+        onclick: () => { removed = [...removed, address]; touched = true; saveChoice(); render(); $('#outreach-gmail')?.focus(); },
       }, 'Togli') : null));
-    const to = plan.to || (plan.type === 'contact' ? plan.label : 'email aziendale non rilevata da Scout');
     return el('dl', { id: editable ? 'outreach-recipients' : 'outreach-verify-recipients', class: 'facts recipients' },
-      el('dt', {}, 'A:'), el('dd', { class: 'rcpt-to' }, plan.type === 'contact' && plan.to ? `${plan.label} · ${plan.to}` : to),
+      el('dt', {}, 'A:'), el('dd', { class: 'rcpt-to' }, plan.to || 'email aziendale non rilevata da Scout'),
       el('dt', {}, 'CC:'), el('dd', {}, ccItems.length ? el('ul', { class: 'rcpt-list' }, ...ccItems) : 'Nessuno'),
       editable && plan.removed.length ? el('dt', {}, 'Tolti dal CC:') : null,
-      editable && plan.removed.length ? el('dd', {}, el('ul', { class: 'rcpt-list' }, ...plan.removed.map((email) => el('li', { class: 'rcpt' },
-        el('span', { class: 'rcpt-email off' }, email),
+      editable && plan.removed.length ? el('dd', {}, el('ul', { class: 'rcpt-list' }, ...plan.removed.map((address) => el('li', { class: 'rcpt' },
+        el('span', { class: 'rcpt-email off' }, address),
         el('button', {
-          class: 'linkbtn', type: 'button', 'aria-label': `Rimetti ${email} in CC`, disabled: Boolean(busy),
-          onclick: () => { removed = removed.filter((e) => e !== email); saveChoice(); render(); },
+          class: 'linkbtn', type: 'button', 'aria-label': `Rimetti ${address} in CC`, disabled: Boolean(busy),
+          onclick: () => { removed = removed.filter((e) => e !== address); touched = true; saveChoice(); render(); },
         }, 'Rimetti'))))) : null);
   }
 
-  // passo 1: destinatari, A/CC, invio dal proprio account, «Ho inviato l'email» (nessuna scrittura)
+  // passo 1: chi invia, destinatari, email pronta in Gmail, poi «Ho inviato l'email» (nessuna scrittura)
   function firstContactForm(p) {
-    const options = recipientOptions(p);
-    const plan = outreachRecipients(p, choice, removed);
+    const operator = getOperator();
+    const plan = outreachRecipients(p, removed);
+    const mail = email(p);
+    const opened = gmailOpened();
+    const canOpen = Boolean(plan.to && operator?.email && !mail.error);
+    const gmailButton = el('button', {
+      id: 'outreach-gmail', class: `btn wide ${opened ? 'ghost' : 'primary'}`, type: 'button', disabled: Boolean(busy) || !canOpen,
+      'aria-describedby': 'outreach-gmail-note', onclick: onOpenGmail,
+    }, opened ? 'Riapri email in Gmail' : 'Apri email pronta in Gmail', el('span', { 'aria-hidden': 'true' }, ' ↗'));
+    const sentButton = el('button', {
+      id: 'outreach-sent', class: `btn wide ${opened ? 'primary' : 'ghost'}`, type: 'button', disabled: Boolean(busy), onclick: onSent,
+    }, "Ho inviato l'email");
     return [
-      el('fieldset', { id: 'outreach-recipient', class: 'choices' },
-        el('legend', {}, 'Destinatari prima email'),
-        ...options.map((o, i) => el('label', { class: 'choice', for: `outreach-r${i}` },
-          el('input', {
-            id: `outreach-r${i}`, type: 'radio', name: 'outreach-recipient', value: o.key, checked: o.key === choice, disabled: Boolean(busy),
-            onchange: () => { choice = o.key; saveChoice(); render(); $(`#outreach-r${i}`)?.focus(); },
-          }),
-          el('span', {}, o.label)))),
-      plan ? recipientLines(plan, { editable: true }) : null,
-      plan?.type === 'company' && p.excluded.length
-        ? el('p', { id: 'outreach-excluded', class: 'meta' }, `Non suggeriti: ${p.excluded.map((e) => `${e.email} (${e.reason})`).join(', ')}.`)
-        : null,
-      el('p', { class: 'send-now' }, 'Invia ora la prima email dal tuo account aziendale.'),
-      plan ? el('p', { class: 'meta' }, plan.cc.length ? "Scrivi all'indirizzo A e metti in copia gli indirizzi CC." : "Scrivi all'indirizzo A.") : null,
-      el('button', {
-        id: 'outreach-sent', class: 'btn primary wide', type: 'button', disabled: Boolean(busy) || !plan,
-        'aria-describedby': plan ? 'outreach-sent-note' : 'outreach-choose-note', onclick: onSent,
-      }, "Ho inviato l'email"),
-      plan ? null : el('p', { id: 'outreach-choose-note', class: 'meta' }, 'Scegli prima a chi hai inviato la prima email.'),
-      el('p', { id: 'outreach-sent-note', class: 'meta' }, 'Agria Commercial non invia email e non legge la posta: in HubSpot non si registra nulla finché non confermi nel passaggio successivo.'),
+      el('section', { id: 'outreach-sender', class: 'outreach-step', 'aria-labelledby': 'outreach-sender-title' },
+        sectionTitle('outreach-sender-title', 'Invia da'),
+        operator?.email
+          ? el('p', { id: 'outreach-from', class: 'sender' }, `${operator.name} · ${operator.email}`)
+          : el('p', { id: 'outreach-from', class: 'sender bad' }, `${operator?.name || '—'}: email aziendale non presente nel registro dei commerciali.`)),
+      el('section', { id: 'outreach-recipients-box', class: 'outreach-step', 'aria-labelledby': 'outreach-recipients-title' },
+        sectionTitle('outreach-recipients-title', 'Destinatari prima email'),
+        recipientLines(plan, { editable: true }),
+        p.excluded.length
+          ? el('p', { id: 'outreach-excluded', class: 'meta' }, `Non suggeriti: ${p.excluded.map((e) => `${e.email} (${e.reason})`).join(', ')}.`)
+          : null),
+      el('section', { id: 'outreach-email', class: 'outreach-step', 'aria-labelledby': 'outreach-email-title' },
+        sectionTitle('outreach-email-title', 'Email di primo contatto'),
+        mail.error
+          ? withId('outreach-email-error', feedback('error', 'Email non pronta', el('p', {}, mail.error)))
+          : [
+            el('p', { class: 'subject' }, el('span', { class: 'subject-label' }, 'Oggetto: '), el('span', { id: 'outreach-subject' }, mail.subject)),
+            el('details', { id: 'outreach-text', class: 'email-preview' },
+              el('summary', {}, "Testo dell'email"),
+              el('pre', { id: 'outreach-text-body', class: 'email-text' }, mail.body)),
+          ]),
+      opened ? null : gmailButton,
+      opened ? el('p', { id: 'outreach-after-gmail', class: 'send-now' }, 'Dopo averla inviata da Gmail, torna qui.') : null,
+      sentButton,
+      opened ? gmailButton : null,
+      el('p', { id: 'outreach-gmail-note', class: 'meta' }, plan.to
+        ? "Gmail si apre in una nuova scheda: controlla l'email e premi «Invia» in Gmail. Agria Commercial non invia email e non legge la posta: in HubSpot non si registra nulla finché non confermi."
+        : "Nessuna email aziendale per questa Azienda: aggiungila in Scout (Email aziendale principale) per preparare l'email."),
     ];
   }
 
@@ -244,14 +299,12 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     const plan = pending;
     const operator = getOperator();
     const { dueAt } = followUpSchedule(Date.now());
-    const contactDate = plan.type === 'contact' ? info?.contact?.firstEmailAt : '';
     const steps = [
       'Stato lead → Primo contatto inviato',
       'Registra data primo invio Azienda',
-      plan.type === 'contact' && !contactDate ? 'Registra data primo invio al Contatto' : null,
       `Crea follow-up per ${formatDue(dueAt)}`,
       `Assegna a ${operator?.name || '—'}`,
-    ].filter(Boolean);
+    ];
     const confirmBusy = busy === 'confirm';
     return [
       el('section', { id: 'outreach-verify', class: 'verify-box', 'aria-labelledby': 'outreach-verify-title' },
@@ -260,8 +313,7 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
         el('p', {}, 'Confermando, Agria Commercial registrerà il primo contatto in HubSpot e programmerà il follow-up.'),
         el('section', { id: 'outreach-preview', class: 'preview-box', 'aria-labelledby': 'outreach-preview-title' },
           el('h4', { id: 'outreach-preview-title' }, 'Cosa succederà'),
-          el('ul', { class: 'checks' }, ...steps.map((s) => el('li', {}, s))),
-          contactDate ? el('p', { class: 'meta' }, `Il Contatto ha già una data di primo invio (${formatHubspotDate(contactDate)}): resta invariata.`) : null),
+          el('ul', { class: 'checks' }, ...steps.map((s) => el('li', {}, s)))),
         el('label', { class: 'confirm sent-check', for: 'outreach-sent-check' },
           el('input', {
             id: 'outreach-sent-check', type: 'checkbox', checked: sentChecked, disabled: Boolean(busy),

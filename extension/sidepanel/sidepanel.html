@@ -154,5 +154,15 @@
 
   <p class="foot">Agria Commercial <span id="version"></span> · I dati restano in questo browser</p>
 </main>
+
+<!-- contatore di oggi del commerciale attivo (sidepanel/dailyCounter.js): Home, Scout, Outreach -->
+<footer id="daily-counter" class="daily" aria-label="Primi contatti di oggi" title="Aziende con il primo contatto registrato oggi. Correggi con − e + se hai contattato aziende fuori da Agria Commercial." hidden>
+  <span id="daily-label" class="daily-label">Oggi</span>
+  <button id="daily-minus" class="daily-btn" type="button" aria-label="Togli 1 dal conteggio di oggi">−</button>
+  <output id="daily-count" class="daily-count" aria-labelledby="daily-label" aria-live="polite">–</output>
+  <button id="daily-plus" class="daily-btn" type="button" aria-label="Aggiungi 1 al conteggio di oggi">+</button>
+  <span id="daily-target" class="daily-target">/ 20</span>
+  <span class="daily-note">aziende contattate</span>
+</footer>
 </body>
 </html>
