@@ -842,6 +842,7 @@ async function run(context, site, fake) {
   equal('data del collega non sovrascritta', colleagueRecord.data_del_primo_invio_email, '2026-10-12T07:00:00.000Z');
   equal('nessuna scrittura, nessun task', writes().length, writesBeforeColleague);
   check('nessun pulsante di conferma', !(await panel.$('#outreach-confirm')));
+  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-refresh');
   await panel.click('#nav-scout');
 
   console.log('\nHubSpot REALE: gravità dei doppioni (La Mora, dominio diverso)');
@@ -898,10 +899,12 @@ async function run(context, site, fake) {
   await panel.click('#next-step-action');
   await waitRead();
   const alreadyView = await text('#outreach-contacted');
-  for (const part of ['Questa Azienda risulta già contattata.', 'Stato attuale', 'Primo contatto inviato', 'Data primo invio', 'Non registrata', 'Prossimo passo disponibile', 'Follow-up telefonico', 'Nessun nuovo primo contatto e nessun follow-up automatico.']) {
+  for (const part of ['Questa Azienda risulta già contattata.', 'Stato attuale', 'Primo contatto inviato', 'Data primo invio', 'Non registrata', 'Nessun nuovo primo contatto e nessun follow-up automatico.']) {
     includes(`già contattata: ${part}`, alreadyView, part);
   }
   check('già contattata: nessun «Conferma email inviata»', !(await panel.$('#outreach-confirm')));
+  check('già contattata: nessun «Registra email inviata…»', !(await panel.$('#outreach-contact-date')) && !(await text('#outreach-body')).includes('Registra email inviata'));
+  equal('già contattata: nessuna azione (solo «Aggiorna da HubSpot»)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-refresh');
   check('già contattata: nessun codice tecnico', !alreadyView.includes('ATTEMPTED_TO_CONTACT'));
   equal('già contattata: nessuna scrittura', writes().length, writesBeforeHard);
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10c-outreach-gia-contattata.png') });
@@ -1073,6 +1076,8 @@ async function run(context, site, fake) {
   check('email all\'Azienda: nessuna data del Contatto in anteprima', !outreachPreview.includes('Contatto'));
   check('anteprima senza codici HubSpot', !/ATTEMPTED_TO_CONTACT|hs_|data_del_primo/.test(await text('#outreach-body')));
   equal('una sola azione primaria: la conferma', (await primaries('outreach')).join(), 'outreach-confirm');
+  equal('Azienda non contattata: flusso normale (destinatario, conferma, aggiorna)', (await panel.$$eval('#outreach-body button', (b) => b.map((x) => x.id))).join(), 'outreach-confirm,outreach-refresh');
+  check('Azienda non contattata: nessun «Registra email inviata…»', !(await panel.$('#outreach-contact-date')));
   equal('azione primaria', (await text('#outreach-confirm')).trim(), 'Conferma email inviata e crea follow-up');
   await panel.setViewportSize({ width: 320, height: 900 });
   check('Outreach: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
@@ -1106,16 +1111,9 @@ async function run(context, site, fake) {
   check('il focus passa all\'esito', await panel.evaluate(() => document.activeElement?.classList.contains('fb')));
   equal('esito annunciato ai lettori di schermo', (await text('#outreach-live')).trim(), `Primo contatto registrato. Follow-up programmato per ${formatDue(expected.dueAt)}.`);
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10b-outreach-follow-up.png') });
-  // prima email al Contatto in un secondo momento: solo la sua data
-  includes('Contatto scritto dopo: proposta', doneView, 'Hai scritto anche a Maria Bianchi?');
-  const patchesBeforeMaria = fake.state.requests.filter((q) => q.method === 'PATCH').length;
-  const companyDateBefore = laMora.data_del_primo_invio_email;
-  await panel.click('#outreach-contact-date');
-  await panel.waitForSelector('#outreach-contact-date-done', { timeout: 15000 });
-  check('Contatto scritto dopo: data del Contatto registrata', Boolean(contactRecord.properties.data_primo_invio_email_al_contatto));
-  equal('Contatto scritto dopo: solo il Contatto', fake.state.requests.filter((q) => q.method === 'PATCH').slice(patchesBeforeMaria).map((q) => q.path).join(), `/crm/objects/2026-09/contacts/${contactRecord.id}`);
-  equal('Contatto scritto dopo: data Azienda invariata', laMora.data_del_primo_invio_email, companyDateBefore);
-  equal('Contatto scritto dopo: nessun nuovo follow-up', fake.tasksOf('companies', created.id).length, 1);
+  // Azienda ormai contattata, Contatto HubSpot senza data: nessuna registrazione parziale del Contatto
+  check('Azienda contattata: nessun «Registra email inviata a Maria Bianchi»', !doneView.includes('Registra email inviata') && !doneView.includes('Hai scritto anche') && !(await panel.$('#outreach-contact-date')));
+  equal('Azienda contattata: data del Contatto ancora vuota', contactRecord.properties.data_primo_invio_email_al_contatto, undefined);
   // Home: follow-up programmato; Home → Outreach → Scout → Home senza perdere nulla
   await panel.click('#nav-home');
   for (const part of ['Follow-up programmato', `Agriturismo La Mora: ${formatDue(expected.dueAt)} · ${ALESSANDRO.name}.`]) includes(`Home: ${part}`, await text('#next-step'), part);
@@ -1132,6 +1130,7 @@ async function run(context, site, fake) {
   await panel.click('#nav-outreach');
   await waitRead();
   includes('pannello riaperto: esito conservato (sessione)', await text('#outreach-body'), 'Follow-up programmato');
+  check('pannello riaperto: nessun «Registra email inviata…»', !(await panel.$('#outreach-contact-date')));
   equal('pannello riaperto: nessuna nuova scrittura', fake.tasksOf('companies', created.id).length, 1);
   await panel.click('#nav-scout');
 

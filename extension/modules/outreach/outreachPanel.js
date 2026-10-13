@@ -3,13 +3,13 @@
 // e non legge email), sceglie a chi l'ha inviata e conferma: il service worker aggiorna HubSpot e
 // crea il follow-up. Il prospect viene dalla bozza di Scout; l'operazione vive nel service worker
 // (sessione di Chrome). Qui c'è solo l'ultima risposta ricevuta, per disegnare la vista.
+// Un'Azienda già contattata si mostra soltanto: nessuna azione di primo contatto, nemmeno la sola
+// data del Contatto (l'azione outreachContactDate del service worker resta, non esposta).
 
 import { el } from '../../ui/dom.js';
 import { feedback } from '../../ui/feedback.js';
 import { MESSAGE } from '../../lib/hubspotMessages.js';
-import {
-  contactedNextStep, outreachProspect, personLabel, recipientOptions, statusLabel,
-} from '../../lib/outreach.js';
+import { outreachProspect, recipientOptions, statusLabel } from '../../lib/outreach.js';
 import { followUpSchedule, formatDue, formatHubspotDate, formatRomeDateTime } from '../../lib/outreachTime.js';
 import { openNavigator } from '../navigator/navigator.js';
 import { OUTREACH } from './outreach.js';
@@ -28,7 +28,7 @@ const withId = (id, node) => Object.assign(node, { id });
 export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNavigate, onChange = () => {} }) {
   let key = ''; // modalità + Azienda a cui si riferisce l'ultima risposta
   let info = null; // { company, contact, contacted, operation, mock } dall'ultima risposta del service worker
-  let busy = ''; // '' | 'read' | 'confirm' | 'retry' | 'contact-date'
+  let busy = ''; // '' | 'read' | 'confirm' | 'retry'
   let error = null; // ultimo errore { code, message }
   let choice = ''; // destinatario scelto (chiave di recipientOptions)
   let visible = false;
@@ -110,23 +110,6 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     else afterOperation(res.operation);
     render({ focusResult: true });
     onChange();
-  }
-
-  async function onContactDate() {
-    const p = prospect();
-    const contact = info?.contact;
-    if (!p || !contact || busy) return;
-    busy = 'contact-date';
-    error = null;
-    render();
-    const res = await call('outreachContactDate', { companyId: p.companyId, contactId: contact.id });
-    busy = '';
-    if (!res.ok) error = res.error;
-    else {
-      info = { ...info, contact: res.contact, contactDateDone: res.outcome };
-      notice = `Data del primo invio registrata per ${contact.name}.`;
-    }
-    render({ focusResult: true });
   }
 
   function afterOperation(op) {
@@ -232,34 +215,17 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     return out;
   }
 
+  // Azienda già contattata: solo il suo stato e la data del primo invio, nessuna azione
   function contactedView(p) {
     const company = info.company;
     return [
       withId('outreach-contacted', feedback('info', 'Questa Azienda risulta già contattata.',
         el('dl', { class: 'facts' },
           el('dt', {}, 'Stato attuale'), el('dd', {}, statusLabel(company.leadStatus)),
-          el('dt', {}, 'Data primo invio'), el('dd', {}, formatHubspotDate(company.firstEmailAt) || 'Non registrata'),
-          el('dt', {}, 'Prossimo passo disponibile'), el('dd', {}, contactedNextStep(company.leadStatus))),
+          el('dt', {}, 'Data primo invio'), el('dd', {}, formatHubspotDate(company.firstEmailAt) || 'Non registrata')),
         el('p', {}, 'Nessun nuovo primo contatto e nessun follow-up automatico.'))),
       link(company.url || p.url, 'Apri in HubSpot'),
-      company.leadStatus === 'ATTEMPTED_TO_CONTACT'
-        ? el('button', { id: 'outreach-navigator', class: 'btn', type: 'button', onclick: () => openNavigator() }, 'Apri Navigatore ', el('span', { 'aria-hidden': 'true' }, '↗'))
-        : null,
     ];
-  }
-
-  // Azienda già contattata, prima email a una persona: si registra solo la data del Contatto
-  function contactDateOffer() {
-    const contact = info?.contact;
-    const op = info?.operation;
-    if (!contact) return [];
-    if (info.contactDateDone) return [withId('outreach-contact-date-done', feedback('success', `Data del primo invio registrata per ${personLabel(contact.name, contact.jobtitle)}`, el('p', {}, "L'Azienda, il suo stato e il follow-up non cambiano.")))];
-    if (contact.firstEmailAt || (op && op.recipient.type === 'contact')) return [];
-    return [el('section', { class: 'sub', 'aria-labelledby': 'outreach-contact-date-title' },
-      el('h3', { id: 'outreach-contact-date-title' }, `Hai scritto anche a ${contact.name}?`),
-      el('p', { class: 'hint' }, "Registra solo la data del primo invio al Contatto: l'Azienda, il suo stato e i follow-up non cambiano."),
-      el('button', { id: 'outreach-contact-date', class: 'btn', type: 'button', disabled: Boolean(busy), 'aria-busy': String(busy === 'contact-date'), onclick: onContactDate },
-        busy === 'contact-date' ? 'Registrazione in corso…' : `Registra email inviata a ${contact.name}`))];
   }
 
   function render({ focusResult = false } = {}) {
@@ -272,14 +238,14 @@ export function createOutreachPanel({ $, getDraft, getOperator, getHubspot, onNa
     else {
       children.push(facts(p));
       if (!hub.ready) children.push(feedback('blocked', hub.blocker || 'HubSpot non è pronto.'));
-      else if (info?.operation) children.push(...operationView(info.operation), ...(info.operation.complete ? contactDateOffer() : []));
+      else if (info?.operation) children.push(...operationView(info.operation));
       else if (!info?.company && busy === 'read') children.push(feedback('info', 'Lettura dello stato in HubSpot…'));
       else if (!info?.company && error) {
         children.push(feedback('error', 'Stato non letto da HubSpot', ...lines(error.message)));
         children.push(el('button', { id: 'outreach-reload', class: 'btn primary', type: 'button', onclick: read }, 'Riprova lettura'));
       } else if (!info?.company) {
         children.push(el('button', { id: 'outreach-reload', class: 'btn primary', type: 'button', onclick: read }, 'Leggi lo stato da HubSpot'));
-      } else if (info.contacted) children.push(...contactedView(p), ...contactDateOffer(), ...(error ? [feedback('error', 'Operazione non riuscita', ...lines(error.message))] : []));
+      } else if (info.contacted) children.push(...contactedView(p), ...(error ? [feedback('error', 'Lettura da HubSpot non riuscita', ...lines(error.message))] : []));
       else children.push(...firstContactForm(p));
       if (info?.mock || (hub.mode === 'mock' && p)) children.push(el('p', { class: 'mocknote' }, 'Simulazione (MOCK): nessun dato letto o scritto su HubSpot.'));
       if (info?.company && !busy) children.push(el('button', { id: 'outreach-refresh', class: 'btn ghost small', type: 'button', onclick: read }, 'Aggiorna da HubSpot'));

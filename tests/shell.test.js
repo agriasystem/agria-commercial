@@ -109,6 +109,23 @@ test('la shell ricorda solo la vista aperta; il resto dello stato resta nella su
   assert.ok(!/draft|hubspotServiceKey|activeOperator|config/.test(src.replace(/@param|nextStep/g, '')), 'nessun dato di Scout, commerciale o configurazione nella shell');
 });
 
+test('Outreach, Azienda già contattata: nessuna azione «Registra email inviata…» (Patch 3.0.1)', () => {
+  const panel = read('modules/outreach/outreachPanel.js').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/Registra email inviata|Hai scritto anche|outreach-contact-date|outreachContactDate/.test(panel), 'nessun pulsante, nessuna chiamata');
+  // vista «già contattata»: solo messaggio, stato e data del primo invio
+  const view = panel.slice(panel.indexOf('function contactedView'), panel.indexOf('function render('));
+  for (const text of ['Questa Azienda risulta già contattata.', 'Stato attuale', 'Data primo invio']) assert.ok(view.includes(text), text);
+  assert.ok(!/el\('button'/.test(view), 'nessun pulsante nella vista');
+  // la logica interna resta nel service worker, per una milestone futura
+  assert.match(read('lib/hubspotService.js'), /async outreachContactDate\(\{ companyId, contactId \}\)/);
+});
+
+test('Outreach, Azienda non contattata: flusso normale invariato', () => {
+  const panel = read('modules/outreach/outreachPanel.js');
+  for (const text of ['Destinatario prima email', 'Invia ora la prima email dal tuo account aziendale.', 'Cosa succederà', 'Conferma email inviata e crea follow-up', 'Riprova creazione follow-up']) assert.ok(panel.includes(text), text);
+  for (const action of ['outreachRead', 'outreachConfirm', 'outreachRetry']) assert.match(panel, new RegExp(`call\\('${action}'`), action);
+});
+
 test('esiti: cinque toni fissi, ciascuno con un\'icona', () => {
   assert.deepEqual(Object.keys(TONES), ['success', 'warning', 'blocked', 'error', 'info']);
   assert.deepEqual(Object.values(TONES), ['✓', '⚠', '⛔', '✕', 'ℹ']);

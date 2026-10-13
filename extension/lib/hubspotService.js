@@ -566,7 +566,8 @@ export function createHubspotService({
 
     /**
      * Azienda già contattata, prima email a un Contatto: solo la data del Contatto (se vuota). L'Azienda,
-     * il suo stato e la sua data non cambiano; nessun nuovo follow-up.
+     * il suo stato e la sua data non cambiano; nessun nuovo follow-up. NON esposta nel pannello (Patch
+     * 3.0.1): un nuovo referente richiede anche la prossima attività; resta per una milestone futura.
      */
     async outreachContactDate({ companyId, contactId }) {
       await operatorOrFail();
