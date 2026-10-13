@@ -103,6 +103,38 @@ salvano da sole mentre scrivi («✓ Salvato» accanto al campo), restano in que
 (`chrome.storage.local`, mai sincronizzate) e mostrano i **Commerciali disponibili** con il loro
 Owner ID, in sola lettura. «← Torna ad Agria Commercial» chiude la pagina.
 
+## Distribuzione interna: master e stable
+
+Niente Chrome Web Store, niente server: i PC dei commerciali hanno una copia del repository privato e
+caricano la cartella `extension` come estensione non pacchettizzata.
+
+| Ramo | Uso |
+|---|---|
+| `master` | Sviluppo corrente, solo sul PC di sviluppo (qui lavora Claude Code). |
+| `stable` | Versione approvata per i commerciali. I loro PC stanno sempre su `stable` e non sviluppano. |
+
+**Pubblicare (PC di sviluppo).** Dopo test e commit: doppio clic su **PUBBLICA-AGRIA-COMMERCIAL.cmd**
+(`tools/publish-stable.ps1`). Lo script controlla di essere nel repository `agria-scout`, con working
+tree pulito e remote `origin`; esegue `npm test`, `npm run e2e` e `npm run navigator:check` e al primo
+errore si ferma senza pubblicare; poi `git fetch origin` e `git push origin HEAD:stable` (spinge il
+commit appena provato). Mai un force push: se `origin/stable` contiene commit che non sono nella
+versione da pubblicare si ferma. Alla fine mostra «Versione stabile pubblicata», commit, versione del
+manifest e data/ora. Per l'e2e usa Playwright installato nel progetto o, se manca, quello di
+`../navigatore-agria-sorgenti/navigatore-agria/node_modules` (solo lettura).
+
+**Aggiornare (PC dei commerciali).** Doppio clic su **AGGIORNA-AGRIA-COMMERCIAL.cmd**
+(`tools/update-workstation.ps1`): scarica `origin/stable`; se ci sono file modificati, file nuovi o
+commit locali si ferma con «Aggiornamento bloccato: sono presenti modifiche locali.» senza cancellare
+nulla; altrimenti porta il ramo `stable` esattamente su `origin/stable` (solo in avanti, nessun reset) e
+mostra versione precedente, nuova versione, commit ed esito («Agria Commercial è già aggiornato.» se
+non c'è niente di nuovo). Poi apre `chrome://extensions` in una nuova scheda (Chrome non si chiude):
+il commerciale preme **↻** su Agria Commercial. Service Key e impostazioni restano nel profilo di
+Chrome; si azzerano solo i dati di sessione (commerciale attivo, prospect in corso).
+
+Installazione di un nuovo commerciale: [docs/INSTALLAZIONE-COMMERCIALE.md](docs/INSTALLAZIONE-COMMERCIALE.md).
+Nel repository non vanno mai Service Key, password, token o dati personali (`.gitignore` esclude anche
+`.env`, `*.key`, `*.pem`, `*.pfx`).
+
 ## HubSpot reale: Service Key e sicurezza
 
 **La chiave.** Scout usa una **Service Key** del portale HubSpot Agria (account 149362651, EU1) con
@@ -471,7 +503,10 @@ extension/                 ← la cartella da caricare in Chrome
   ui/dom.js · ui/feedback.js     costruzione del DOM senza HTML da stringhe; componente degli esiti
   icons/                         generate da tools/make-icons.js
 tests/                     test Node, siti di prova (fixtures), support/fakeHubspot.js (HubSpot finto)
-tools/                     e2e.js (prova nel browser), make-icons.js, sync-navigator.js (copia del Navigatore)
+tools/                     e2e.js (prova nel browser), make-icons.js, sync-navigator.js (copia del Navigatore),
+                           publish-stable.ps1 e update-workstation.ps1 (distribuzione interna)
+docs/                      INSTALLAZIONE-COMMERCIALE.md
+PUBBLICA-AGRIA-COMMERCIAL.cmd · AGGIORNA-AGRIA-COMMERCIAL.cmd   lanciatori degli script di distribuzione
 ```
 
 ## Controlli
@@ -480,7 +515,7 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo A (Scout), B (primo contatto), C (follow-up programmato), D (già contattata), Home, navigazione, la shell che ricorda solo la vista. `tests/outreach.test.js`: +2 giorni lavorativi da lunedì a domenica, 14:30 Europe/Rome, CET, CEST, cambio d'ora, piano del primo contatto (date vuote valorizzate, date presenti invariate, email all'Azienda senza Contatto, Lead Status, owner, task e associazioni), prospect dalla bozza. `tests/outreachFlow.test.js`: lo stesso nel service worker contro un HubSpot finto, più doppio clic, task fallito e nuovo tentativo, task creato con risposta persa, esito incerto sull'Azienda, proprietà del portale, Azienda già contattata, data del solo Contatto (azione interna, non esposta). `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo A (Scout), B (primo contatto), C (follow-up programmato), D (già contattata), Home, navigazione, la shell che ricorda solo la vista. `tests/outreach.test.js`: +2 giorni lavorativi da lunedì a domenica, 14:30 Europe/Rome, CET, CEST, cambio d'ora, piano del primo contatto (date vuote valorizzate, date presenti invariate, email all'Azienda senza Contatto, Lead Status, owner, task e associazioni), prospect dalla bozza. `tests/outreachFlow.test.js`: lo stesso nel service worker contro un HubSpot finto, più doppio clic, task fallito e nuovo tentativo, task creato con risposta persa, esito incerto sull'Azienda, proprietà del portale, Azienda già contattata, data del solo Contatto (azione interna, non esposta). `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. `tests/distribution.test.js` (Windows): gli script di distribuzione su repository temporanei in `.tmp/` con un remote finto locale — pubblicazione rifiutata con working tree sporco, senza origin, con un controllo fallito o con stable divergente; aggiornamento al commit stable giusto, già aggiornato, modifiche locali conservate, passaggio da un altro ramo, lanciatori `.cmd`. |
 | `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione; Outreach: email all'Azienda, email al Contatto, data scritta da un collega prima della conferma, task fallito e nuovo tentativo (un solo task), doppio clic, Azienda già contattata senza alcuna azione, Home → Outreach → Scout → Home e riapertura senza perdere nulla, MOCK. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 | `npm run navigator:check` | La copia del Navigatore è allineata al suo repository? (vedi *Navigatore*) |

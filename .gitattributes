@@ -1,3 +1,7 @@
 # Copia generata del Navigatore (tools/sync-navigator.js): byte identici al file buildato del suo
 # repository, verificati con SHA-256 in tests/navigator.test.js. Nessuna conversione dei fine riga.
 extension/modules/navigator/app/** -text
+
+# Script di distribuzione per Windows: fine riga CRLF anche su PC con un core.autocrlf diverso
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

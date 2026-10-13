@@ -1,2 +1,10 @@
 node_modules/
 .tmp/
+
+# credenziali e chiavi: mai nel repository (la Service Key vive solo nel profilo di Chrome)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
