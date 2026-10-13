@@ -48,11 +48,10 @@
         <p class="module-text">Trova, analizza e registra nuovi prospect.</p>
         <button id="home-open-scout" class="btn wide" type="button" data-view="scout">Apri Scout</button>
       </article>
-      <article class="module-card off" aria-labelledby="mod-outreach-title">
+      <article class="module-card" aria-labelledby="mod-outreach-title">
         <h3 id="mod-outreach-title" class="module-name">Outreach</h3>
         <p class="module-text">Gestisci primo contatto e follow-up.</p>
-        <button id="home-outreach" class="btn wide" type="button" disabled aria-describedby="home-outreach-note">Disponibile prossimamente</button>
-        <p id="home-outreach-note" class="meta">Arriverà nella prossima fase.</p>
+        <button id="home-outreach" class="btn wide" type="button" data-view="outreach">Apri Outreach</button>
       </article>
       <article class="module-card" aria-labelledby="mod-navigator-title">
         <h3 id="mod-navigator-title" class="module-name">Navigatore</h3>
@@ -133,6 +132,8 @@
     <div id="verify-result" role="status" aria-live="polite" hidden></div>
     <div id="company-step" class="crm-step" aria-live="polite" hidden></div>
     <div id="contact-step" class="crm-step" aria-live="polite" hidden></div>
+    <!-- passaggio a Outreach quando l'Azienda è in HubSpot (creata o già presente) -->
+    <div id="scout-next-step" class="handoff"></div>
     <details id="audit-box" class="audit">
       <summary>Registro HubSpot di questa sessione <span id="audit-count" class="count"></span></summary>
       <ol id="audit-list" class="audit-list"></ol>
@@ -140,13 +141,13 @@
   </section>
   </div>
 
-  <!-- OUTREACH: arriverà nella prossima fase -->
+  <!-- OUTREACH: primo contatto e primo follow-up (modules/outreach/outreachPanel.js) -->
   <section id="view-outreach" class="view" aria-labelledby="outreach-title" hidden>
-    <div class="card placeholder">
+    <div class="card outreach">
       <h2 id="outreach-title" class="view-title" tabindex="-1" data-view-title>Outreach</h2>
-      <p id="outreach-message" class="placeholder-text"></p>
-      <p class="hint">Qui arriveranno primo contatto e follow-up. Intanto Scout e Navigatore sono pronti.</p>
-      <button id="outreach-home" class="btn" type="button" data-view="home">Torna alla Home</button>
+      <p class="hint">Registra il primo contatto e programma il primo follow-up.</p>
+      <div id="outreach-body" class="outreach-body"></div>
+      <p id="outreach-live" class="sr" aria-live="polite"></p>
     </div>
   </section>
   </div>

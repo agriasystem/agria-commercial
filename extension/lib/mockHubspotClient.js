@@ -51,5 +51,34 @@ export function createMockHubspotClient({ mockScenario = 'not_found', mockDelayM
       await step();
       return { ok: true };
     },
+    // Outreach: un'azienda simulata è sempre «Da contattare» e senza data di primo invio
+    async getCompanyOutreach(companyId) {
+      await step();
+      return { id: String(companyId), name: '', leadStatus: 'NEW', firstEmailAt: '', ownerId: '', url: '' };
+    },
+    async getContactOutreach(contactId) {
+      await step();
+      return { id: String(contactId), name: '', jobtitle: '', email: '', firstEmailAt: '', url: '' };
+    },
+    async getProperty(objectType, name) {
+      await step();
+      return { name, type: name === 'hs_lead_status' ? 'enumeration' : 'datetime', options: name === 'hs_lead_status' ? ['NEW', 'ATTEMPTED_TO_CONTACT', 'CONNECTED', 'OPEN_DEAL'] : [] };
+    },
+    async updateCompany() {
+      await step();
+      return { ok: true };
+    },
+    async updateContact() {
+      await step();
+      return { ok: true };
+    },
+    async createTask() {
+      await step();
+      return { id: nextId('MOCK-T') };
+    },
+    async findFollowUpTasks() {
+      await step();
+      return [];
+    },
   });
 }

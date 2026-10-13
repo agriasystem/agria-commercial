@@ -6,7 +6,7 @@
 // hubspot_owner_id SOLO dal commerciale attivo, hs_lead_status sempre NEW per un'azienda nuova,
 // tipo_struttura_hospitality solo con settore Hospitality, hs_legal_basis solo se confermata.
 
-import { COMPANY_PROPS, CONTACT_PROPS, isContactReady, isPropVisible, LEAD_STATUS, LEGAL_BASIS } from './crmModel.js';
+import { COMPANY_PROPS, CONTACT_PROPS, isContactReady, isPropVisible, LEAD_STATUS, LEGAL_BASIS, OUTREACH_LABELS } from './crmModel.js';
 import { requireOperator } from './operators.js';
 import { normalizeDomain, normalizeEmail, normalizeLinkedin, normalizePhone, normalizeUrl } from './validation.js';
 
@@ -93,5 +93,5 @@ export function contactPayload(record, operator, { legalBasisConfirmed = false }
 /** Etichetta leggibile di una proprietà ("Settore Agria"), per l'anteprima e i messaggi di errore. */
 export function propertyLabel(name) {
   const prop = [...COMPANY_PROPS, ...CONTACT_PROPS].find((p) => p.name === name);
-  return prop ? prop.label : name;
+  return prop ? prop.label : OUTREACH_LABELS[name] || name;
 }

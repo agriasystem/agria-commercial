@@ -62,7 +62,7 @@ function preview(properties) {
  * $: selettore; getDraft/setDraft: la bozza del pannello (setDraft salva); getOperator: commerciale
  * attivo; needsOperator: apre la scelta del commerciale se manca (true = fermarsi).
  */
-export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSessionLegalBasis = () => false, needsOperator }) {
+export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSessionLegalBasis = () => false, needsOperator, afterRender = () => {} }) {
   let status = { mode: 'mock', mockScenario: 'not_found', ready: true, blocker: '', keyConfigured: false, connection: { state: 'untested' } };
   let busy = ''; // '' | 'verify' | 'company' | 'contact' | 'associate'
   let verifyError = null; // { code, message } dell'ultima verifica non riuscita
@@ -283,7 +283,7 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
     const mock = status.mode !== 'real';
     $('#hubspot-hint').textContent = mock
       ? `Simulazione: nessun dato viene letto o scritto su HubSpot. Scenario: ${MOCK_SCENARIOS[status.mockScenario] || ''}.`
-      : 'HubSpot reale: la verifica legge i dati, le creazioni partono solo con un tuo clic. I record esistenti non vengono mai modificati.';
+      : 'HubSpot reale: la verifica legge i dati, le creazioni partono solo con un tuo clic. Scout non modifica i record esistenti.';
     const blocker = $('#hubspot-blocker');
     blocker.replaceChildren(...(status.blocker ? [feedback('blocked', status.blocker)] : []));
     blocker.hidden = !status.blocker;
@@ -297,12 +297,14 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
     if (!getOperator()) {
       // senza commerciale il pannello mostra solo la sua scelta: niente anteprime (servono l'owner)
       for (const id of ['#company-step', '#contact-step']) $(id).hidden = true;
+      afterRender();
       return;
     }
     const st = state();
     renderVerify(st);
     renderCompanyStep(st);
     renderContactStep(st);
+    afterRender();
   }
 
   async function renderAudit() {
@@ -326,6 +328,8 @@ export function createHubspotPanel({ $, getDraft, setDraft, getOperator, getSess
     refreshStatus,
     /** Modalità HubSpot attuale, come la dice il service worker (nessuna copia della configurazione). */
     get mode() { return status.mode; },
+    /** Stato del collegamento a HubSpot per gli altri moduli: { mode, ready, blocker }. */
+    get status() { return { mode: status.mode, ready: status.ready, blocker: status.blocker }; },
     /** Dati dell'azienda cambiati (correzione a mano, nuova pagina, Svuota): la verifica va rifatta. */
     dataChanged() {
       dataVersion += 1;

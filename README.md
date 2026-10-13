@@ -1,9 +1,9 @@
 # Agria Commercial
 
 Estensione Chrome di Agria System per il lavoro commerciale, in un solo pannello laterale con tre
-moduli: **Scout** (trova, analizza e registra nuovi prospect), **Outreach** (primo contatto e
-follow-up: in arrivo, per ora solo un segnaposto) e **Navigatore** (la guida durante le chiamate,
-aperta in una scheda ampia). Vedi *Moduli e navigazione*.
+moduli: **Scout** (trova, analizza e registra nuovi prospect), **Outreach** (registra il primo
+contatto e programma il primo follow-up in HubSpot) e **Navigatore** (la guida durante le chiamate,
+aperta in una scheda ampia). Vedi *Moduli e navigazione* e *Outreach*.
 
 **Scout.** Il commerciale apre il sito ufficiale di un prospect, apre Agria Commercial nel
 pannello laterale, entra in **Scout** e preme **Scansione approfondita**: Scout
@@ -22,7 +22,7 @@ nessuno scraping di Google Maps. HubSpot si usa con le API gratuite del portale 
 |---|---|
 | **Reale** | Scelta del commerciale all'apertura, scansione approfondita del sito (link interni + sitemap, stesso dominio, una pagina alla volta, annullabile), analisi della sola pagina aperta, estrazione di tutti i dati pubblici, accumulo e deduplica tra pagine, form HubSpot Azienda e Contatto, persone rilevate, contesto rapido, correzioni a mano, bozza conservata alla riapertura del pannello, impostazioni. In modalità **HubSpot reale**: verifica dei doppioni, creazione di una nuova Azienda, creazione del Contatto e associazione all'Azienda (API HubSpot 2026-09). |
 | **MOCK** | Modalità predefinita. Verifica e creazione rispondono in base allo scenario scelto nelle Impostazioni (*Azienda non presente*, *Azienda già presente*, *Errore HubSpot*): nessuna chiamata a HubSpot, nessuna credenziale. Il badge in alto dice sempre **HubSpot MOCK** o **HubSpot REALE**. |
-| **Non presente** | Modifica di aziende o contatti già in HubSpot (solo lettura e visualizzazione), associazione di un contatto già esistente, trattative, task di follow-up, invio email, Gmail (Outreach è un segnaposto: «Outreach sarà disponibile nella prossima fase.»). Il Navigatore non riceve dati da Scout. |
+| **Non presente** | Modifica di aziende o contatti già in HubSpot (solo lettura e visualizzazione), associazione di un contatto già esistente, trattative, invio o lettura di email, Gmail, follow-up successivi al primo, lettura generale dei task, festività nel calcolo dei giorni lavorativi. Il Navigatore non riceve dati da Scout né da Outreach. |
 
 ## Moduli e navigazione
 
@@ -36,8 +36,8 @@ Dopo la scelta del commerciale il pannello apre la **Home** («Da dove vuoi part
   HubSpot»), le tre schede dei moduli e la **base giuridica predefinita** della sessione.
 - **Scout**: il lavoro di sempre, identico (scansione, form, persone, HubSpot). Passare alla Home e
   tornare non perde nulla: la bozza resta una sola, in `chrome.storage.session`.
-- **Outreach**: pulsante disattivato con la spiegazione; la vista dice «Outreach sarà disponibile
-  nella prossima fase.». Nessuna logica di email, Gmail o task.
+- **Outreach**: il primo contatto del prospect che Scout ha portato in HubSpot (vedi *Outreach*).
+  Senza un prospect pronto: «Nessun prospect pronto per il primo contatto.» e **Vai a Scout**.
 - **Navigatore ↗**: si apre in una **nuova scheda** dell'estensione, a tutta larghezza
   (`modules/navigator/app/navigatore.html`), non dentro il pannello. Il pannello resta dov'era.
 
@@ -189,8 +189,9 @@ eliminala o ruotala anche in HubSpot.
    e **Riprova creazione Contatto**: l'ID dell'azienda resta nella bozza, l'azienda non si ricrea.
    Contatto creato ma associazione non riuscita → **Riprova associazione**.
 
-I record già presenti in HubSpot si leggono e si mostrano soltanto: nessun PATCH, nessun
-aggiornamento automatico. Il link «Apri in HubSpot» compare solo se è HubSpot a fornirlo nella
+Scout legge e mostra soltanto i record già presenti: nessun aggiornamento. L'unica modifica di
+record esistenti è quella di Outreach, dopo un clic esplicito e solo su Lead Status e date di primo
+invio (vedi *Outreach*). Il link «Apri in HubSpot» compare solo se è HubSpot a fornirlo nella
 risposta (campo `url`) e punta a quel record su hubspot.com; altrimenti si mostra il Record ID.
 
 **Registro HubSpot di questa sessione** (in fondo alla sezione HubSpot): ora, commerciale,
@@ -213,6 +214,11 @@ HubSpot le indicizzi (HubSpot avvisa che un record nuovo può impiegare qualche 
 | Ricerca contatti | `POST /crm/objects/2026-09/contacts/search` |
 | Creazione contatto | `POST /crm/objects/2026-09/contacts` |
 | Associazione Contatto → Azienda | `PUT /crm/objects/2026-09/contact/{contactId}/associations/default/company/{companyId}` |
+| Outreach: stato e date | `GET /crm/objects/2026-09/companies/{id}` · `GET /crm/objects/2026-09/contacts/{id}` (con `properties`) |
+| Outreach: tipo delle proprietà | `GET /crm/properties/2026-09/{companies\|contacts}/{nome}` |
+| Outreach: Lead Status e date | `PATCH /crm/objects/2026-09/companies/{id}` · `PATCH /crm/objects/2026-09/contacts/{id}` |
+| Outreach: follow-up | `POST /crm/objects/2026-09/tasks` (con le associazioni) |
+| Outreach: follow-up già creato? | `GET /crm/objects/2026-09/companies/{id}/associations/tasks` · `POST /crm/objects/2026-09/tasks/batch/read` |
 
 Un unico wrapper HTTP gestisce Bearer, timeout, 401, 403, 404, 409, 429 (con `Retry-After`, al
 massimo due nuovi tentativi), 5xx (si riprovano solo le letture), errori di rete ed errori di
@@ -222,6 +228,62 @@ chiede una nuova verifica.
 **Aggiornare dopo una nuova versione del codice:** in `chrome://extensions` premi ↻ sulla scheda
 di Agria Commercial (prima «Agria Scout»), poi chiudi e riapri il pannello laterale e scegli di nuovo il commerciale. Le
 impostazioni restano; la bozza in corso si azzera. Serve Chrome 116 o successivo.
+
+## Outreach: primo contatto e follow-up
+
+Outreach parte quando Scout ha **creato l'Azienda** in HubSpot oppure l'ha **trovata con certezza**
+(un solo doppione certo). Legge tutto dalla stessa bozza di Scout (ID HubSpot, nome, email aziendali,
+Contatto HubSpot se c'è) e dal commerciale attivo: nessuna copia. In Scout e nella Home il Prossimo
+passo propone **Vai al primo contatto · Apri Outreach**.
+
+1. **Aprendo Outreach** il service worker rilegge l'Azienda in HubSpot (Lead Status, data del primo
+   invio) e, se c'è, il Contatto.
+2. **Destinatario prima email**: l'email aziendale (principale o secondaria) oppure il Contatto
+   HubSpot («Roberto Rossi — Titolare»). Il Contatto non è obbligatorio. Nessuna scelta predefinita.
+3. «**Invia ora la prima email dal tuo account aziendale.**» Agria Commercial non invia email, non
+   apre Gmail e non legge la posta.
+4. **Cosa succederà**: stato lead → Primo contatto inviato · data primo invio Azienda · data del
+   Contatto (solo se l'email è andata al Contatto) · follow-up per {giorno} alle 14:30 · assegnato al
+   commerciale attivo.
+5. **Conferma email inviata e crea follow-up** (l'unica azione primaria). Il service worker rilegge
+   l'Azienda; se nel frattempo risulta già contattata si ferma senza scrivere nulla. Altrimenti:
+   - Azienda: `hs_lead_status` = `ATTEMPTED_TO_CONTACT` e `data_del_primo_invio_email` = ora, **solo
+     se vuota** (una data già presente non si riscrive mai);
+   - Contatto (solo se destinatario): `data_primo_invio_email_al_contatto` = ora, solo se vuota;
+   - un task «FOLLOW-UP | {Azienda}», tipo CALL, NOT_STARTED, priorità NONE, owner = commerciale
+     attivo al momento della conferma, note «Primo follow-up dopo email commerciale Agria System.»
+     (più «Contatto: {nome} — {qualifica}» se l'email è andata al Contatto), associato all'Azienda
+     (tipo 192) e, se serve, al Contatto (tipo 204).
+
+**Date.** Prima di scrivere si legge il tipo delle due proprietà nel portale: `datetime` → istante della
+conferma in millisecondi Unix; `date` → il giorno in Italia, `YYYY-MM-DD` (documentazione HubSpot
+Properties API). Un altro tipo, una proprietà assente o un Lead Status senza `ATTEMPTED_TO_CONTACT`
+bloccano tutto prima di qualsiasi scrittura. A schermo: «13/10/2026, 10:42» (Europe/Rome).
+
+**Scadenza del follow-up** (`lib/outreachTime.js`, funzione pura): +2 giorni lavorativi alle **14:30
+Europe/Rome** (CET e CEST gestite), promemoria 30 minuti prima. Lavorativi = lunedì-venerdì, festività
+escluse dal calcolo. Lunedì → mercoledì, martedì → giovedì, mercoledì → venerdì, giovedì → lunedì,
+venerdì → martedì, sabato e domenica → martedì. `hs_timestamp` e `hs_task_reminders` in millisecondi
+Unix (formato richiesto da HubSpot per i promemoria).
+
+**Doppio clic e nuovi tentativi.** Il pulsante si disattiva subito; il service worker tiene un blocco
+per Azienda e registra l'operazione in `chrome.storage.session` (`hubspotSession`). Una seconda
+conferma per la stessa Azienda non scrive nulla. HubSpot non ha transazioni: se l'Azienda è aggiornata
+ma il task fallisce, niente viene annullato e si vede «✓ Primo contatto registrato ⚠ Follow-up non
+creato» con **Riprova creazione follow-up**, che crea solo il task (stessa scadenza, stesso owner,
+nessuna data riscritta). Prima di ricrearlo cerca fra i task associati all'Azienda quello con lo
+stesso titolo e la stessa scadenza: se la prima richiesta era arrivata, lo riusa invece di
+duplicarlo. Se non riesce a controllare, non crea nulla.
+
+**Azienda già contattata** (data del primo invio presente, oppure stato Primo contatto inviato, In
+contatto, Opportunità aperta): niente flusso del primo contatto, niente follow-up automatico. Si
+vedono «Questa Azienda risulta già contattata.», stato attuale, data del primo invio e prossimo passo
+disponibile. Se c'è un Contatto HubSpot senza data, **Registra email inviata a {nome}** scrive solo la
+data del Contatto: l'Azienda e la sua data non cambiano (Azienda e Contatto possono avere date diverse).
+
+**Permessi.** Bastano gli scope della Service Key attuale: secondo la documentazione HubSpot i task
+richiedono `crm.objects.contacts.read`/`write`, le definizioni delle proprietà e le associazioni si
+leggono con `crm.objects.companies.read`/`crm.objects.contacts.read`.
 
 ## Uso
 
@@ -395,7 +457,10 @@ extension/                 ← la cartella da caricare in Chrome
   lib/mockHubspotClient.js       HubSpot simulato con i tre scenari, stessa interfaccia del reale
   lib/nextStep.js                «Prossimo passo» della Home, calcolato dalla bozza (nessuno stato suo)
   shell/shell.js                 navigazione fra Home, Scout, Outreach; apertura del Navigatore
-  modules/outreach/outreach.js   segnaposto di Outreach (nessuna logica)
+  modules/outreach/outreach.js   testi del modulo Outreach
+  modules/outreach/outreachPanel.js  vista Outreach (destinatario, anteprima, conferma, nuovo tentativo)
+  lib/outreach.js                regole del primo contatto: prospect dalla bozza, date una sola volta, task
+  lib/outreachTime.js            Europe/Rome, +2 giorni lavorativi alle 14:30, date in italiano
   modules/navigator/navigator.js apre il Navigatore in una nuova scheda
   modules/navigator/app/         copia GENERATA del Navigatore (tools/sync-navigator.js): non modificare
   sidepanel/                     pannello laterale: Home, viste dei moduli e Scout (pageReader.js,
@@ -414,8 +479,8 @@ Servono Node 20 o successivo. Nessuna dipendenza da installare per i test princi
 
 | Comando | Cosa fa |
 |---|---|
-| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo in ogni stato di Scout (anche MOCK/REALE separati), Home, navigazione, Outreach segnaposto, la shell che ricorda solo la vista. `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. |
-| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo, Outreach disattivato), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
+| `npm test` | Estrazione, scoperta delle pagine, sitemap, scansione (limite, dominio, errori, timeout, annullamento, niente doppioni), download contro un server locale, accumulo tra pagine, modello HubSpot, contesto rapido, bozza, impostazioni e salvataggio automatico, mock HubSpot e controlli statici su manifest, permessi e sicurezza. `tests/quality.test.js`: i casi dei test manuali (email attaccata al telefono, alias funzionali, persone parziali, contesto rapido La Mora e Perticaia, tipo struttura condizionale, titoli dell'informativa privacy che non sono persone). `tests/operators.test.js`: registro dei commerciali, scelta e cambio nella sessione, owner di Azienda e Contatto, nessun utilizzo senza commerciale. `tests/hubspotClient.test.js`, `hubspotDuplicates.test.js`, `hubspotFlow.test.js`: client 2026-09 (401, 403, 404, 409, 429, 5xx, rete, timeout, validazione), doppioni di aziende e contatti, Service Key (mai esposta), creazione, nuovo controllo prima della scrittura, race condition, doppio clic, owner, Lead Status, base giuridica, associazione, operazioni a metà. `tests/shell.test.js`: Prossimo passo A (Scout), B (primo contatto), C (follow-up programmato), D (già contattata), Home, navigazione, la shell che ricorda solo la vista. `tests/outreach.test.js`: +2 giorni lavorativi da lunedì a domenica, 14:30 Europe/Rome, CET, CEST, cambio d'ora, piano del primo contatto (date vuote valorizzate, date presenti invariate, email all'Azienda senza Contatto, Lead Status, owner, task e associazioni), prospect dalla bozza. `tests/outreachFlow.test.js`: lo stesso nel service worker contro un HubSpot finto, più doppio clic, task fallito e nuovo tentativo, task creato con risposta persa, esito incerto sull'Azienda, proprietà del portale, Azienda già contattata, Contatto scritto dopo. `tests/navigator.test.js`: copia del Navigatore identica byte per byte al file buildato, baseline, isolamento, repository del Navigatore invariato. |
+| `npm run e2e` | Carica l'estensione vera in Chromium e ripercorre il lavoro del commerciale sui siti di prova (`tests/fixtures`): scelta del commerciale (blocco senza scelta, cambio durante la sessione, nuova sessione di Chrome), Home (tre moduli, Prossimo passo), navigazione con mouse e tastiera (Invio, Spazio, Tab, focus), Navigatore in una nuova scheda (contenuti, `localStorage`, nessun errore), Home ↔ Scout senza perdere dati, nessuno scroll orizzontale a 400 e 320 px, impostazioni con salvataggio automatico, analisi, correzioni, scansione approfondita con sitemap, pagine rotte, file non HTML, link esterni e blog lungo, persone, dati rilevati, base giuridica, MOCK, annullamento, nuovo prospect, riapertura, Svuota, i casi La Mora e Perticaia (`tests/fixtures/caso-*.html`) e HubSpot REALE contro un HubSpot finto: Service Key, test della connessione (401, 403, 200), 429, errore di validazione, race condition, azienda già presente, contatto già presente, Azienda + Contatto con errore e nuovo tentativo, associazione; Outreach: email all'Azienda, email al Contatto, data scritta da un collega prima della conferma, task fallito e nuovo tentativo (un solo task), doppio clic, Azienda già contattata, Contatto scritto dopo, Home → Outreach → Scout → Home e riapertura senza perdere nulla, MOCK. Verifica l'ordine esatto delle pagine scaricate e che le pagine analizzate restino identiche. Schermate in `.tmp/e2e/`. |
 | `npm run check` | I due precedenti in fila. |
 | `npm run navigator:check` | La copia del Navigatore è allineata al suo repository? (vedi *Navigatore*) |
 
@@ -462,7 +527,16 @@ Milestone 2), prima in sola lettura.
 - HubSpot, contatti: un contatto che condivide il telefono dell'azienda con un collega già in
   HubSpot risulta «già presente» (regola prudente: nessun duplicato).
 - HubSpot: «Associa contatto esistente a questa Azienda» non è ancora disponibile (prossimo passo):
-  un contatto già presente si associa a mano in HubSpot. Nessuna modifica a record esistenti.
+  un contatto già presente si associa a mano in HubSpot.
+- Outreach: «una data già presente non si riscrive» si basa su una rilettura subito prima della
+  scrittura; HubSpot non offre una scrittura condizionata, quindi due conferme sulla stessa Azienda da
+  due browser nello stesso istante non sono escluse del tutto.
+- Outreach: l'operazione (e quindi «Follow-up programmato» nel Prossimo passo) vive nella sessione di
+  Chrome. Dopo una chiusura completa di Chrome l'Azienda risulta «già contattata», che è vero, ma la
+  data del follow-up si vede solo in HubSpot (la lettura dei task non è ancora implementata).
+- Outreach: le festività non sono considerate nel calcolo dei giorni lavorativi.
+- Outreach: il Contatto si può scegliere come destinatario solo se Scout lo ha creato o trovato in
+  HubSpot per questo prospect.
 - HubSpot: senza backend non c'è un lock tra commerciali (vedi *Concorrenza tra commerciali*).
 - La Service Key in `chrome.storage.local` non è cifrata (vedi *HubSpot reale: Service Key e sicurezza*).
 - Il link «Apri in HubSpot» dipende dal campo `url` restituito dall'API: se manca, si vede solo il

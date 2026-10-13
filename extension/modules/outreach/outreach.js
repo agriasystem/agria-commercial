@@ -1,8 +1,9 @@
-// Modulo Outreach di Agria Commercial: primo contatto e follow-up. In questa versione è solo un
-// segnaposto: nessuna logica, nessuna email, nessun task. Arriverà nella prossima fase.
+// Modulo Outreach di Agria Commercial: primo contatto e primo follow-up (vedi outreachPanel.js per la
+// vista, lib/outreach.js per le regole, lib/hubspotService.js per le scritture in HubSpot).
+// Niente invio di email, niente Gmail: il commerciale scrive dal suo account e poi conferma qui.
 
 export const OUTREACH = Object.freeze({
-  available: false,
-  message: 'Outreach sarà disponibile nella prossima fase.',
+  available: true,
   description: 'Gestisci primo contatto e follow-up.',
+  empty: 'Nessun prospect pronto per il primo contatto.',
 });

@@ -29,6 +29,13 @@ export const LEAD_STATUS_LABELS = Object.freeze({
 /** "ATTEMPTED_TO_CONTACT" → "Primo contatto inviato"; un valore sconosciuto resta com'è. */
 export const leadStatusLabel = (value) => LEAD_STATUS_LABELS[value] || String(value || '');
 export const LEGAL_BASIS = 'Legitimate interest – prospect/lead';
+// proprietà di Outreach nel portale Agria (internal name esatti): Azienda e Contatto hanno nomi diversi
+export const COMPANY_FIRST_EMAIL = 'data_del_primo_invio_email';
+export const CONTACT_FIRST_EMAIL = 'data_primo_invio_email_al_contatto';
+export const OUTREACH_LABELS = Object.freeze({
+  [COMPANY_FIRST_EMAIL]: 'Data del primo invio email',
+  [CONTACT_FIRST_EMAIL]: 'Data primo invio email al contatto',
+});
 
 // proprietà nell'ordine del form HubSpot; label = testo mostrato al commerciale;
 // visibleIf = il campo si mostra solo quando gli altri campi hanno questi valori;

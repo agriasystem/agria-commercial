@@ -109,7 +109,10 @@ test('rete solo in lib/fetchPage.js (GET dei siti) e lib/hubspotClient.js (solo 
       assert.ok(!/\bmethod\s*:\s*['"](POST|PUT|PATCH|DELETE)/i.test(src), `${file}: richiesta che modifica dati`);
       assert.ok(!/request\(\s*['"](POST|PUT|PATCH|DELETE)/.test(src), `${file}: richiesta che modifica dati`);
     }
-    assert.ok(!/['"](PATCH|DELETE)['"]/.test(src), `${file}: nessuna modifica o cancellazione di record`);
+    assert.ok(!/['"]DELETE['"]/.test(src), `${file}: nessuna cancellazione di record`);
+    // modifiche di record esistenti: solo il client HubSpot, in un solo punto (Outreach, proprietà ammesse)
+    if (file !== 'lib/hubspotClient.js') assert.ok(!/['"]PATCH['"]/.test(src), `${file}: nessuna modifica di record`);
+    else assert.equal((src.match(/['"]PATCH['"]/g) || []).length, 1, 'un solo PATCH, nella funzione update');
     assert.ok(!/\beval\s*\(|new\s+Function\s*\(/.test(src), `${file}: codice dinamico`);
     if (VENDORED(file)) assert.ok(!/\bchrome\.|document\.write/.test(src), `${file}: il Navigatore non usa API dell'estensione`);
     else assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write/.test(src), `${file}: HTML da stringhe`);
@@ -119,16 +122,21 @@ test('rete solo in lib/fetchPage.js (GET dei siti) e lib/hubspotClient.js (solo 
   assert.match(fetcher, /credentials: 'omit'/);
   assert.match(fetcher, /referrerPolicy: 'no-referrer'/);
   assert.ok(!/\bbody\s*:/.test(fetcher), 'nessun dato inviato');
-  // HubSpot: un solo indirizzo fisso, le sole scritture sono creazioni (POST) e l'associazione (PUT)
+  // HubSpot: un solo indirizzo fisso; scritture: creazioni (POST), associazione (PUT), task di follow-up,
+  // e l'unico PATCH di Outreach, limitato alle proprietà in UPDATABLE (le ricerche sono POST di sola lettura)
   const hub = read('lib/hubspotClient.js');
   assert.match(hub, /export const API_BASE = 'https:\/\/api\.hubapi\.com';/);
   assert.equal((hub.match(/https?:\/\/[a-z0-9.-]+/gi) || []).filter((u) => u !== 'https://api.hubapi.com').length, 0, 'nessun altro host');
-  assert.deepEqual([...hub.matchAll(/request\('(POST|PUT)', `([^`]+)`/g)].map((m) => `${m[1]} ${m[2]}`), [
+  assert.deepEqual([...hub.matchAll(/request\('(POST|PUT|PATCH)', `([^`]+)`/g)].map((m) => `${m[1]} ${m[2]}`), [
     'POST ${OBJECTS}/${object}/search',
+    'PATCH ${OBJECTS}/${object}/${numericId(id, object === \'companies\' ? \'azienda\' : \'contatto\')}',
     'POST ${OBJECTS}/companies',
     'POST ${OBJECTS}/contacts',
     'PUT ${OBJECTS}/contact/${from}/associations/default/company/${to}',
+    'POST ${OBJECTS}/tasks',
+    'POST ${OBJECTS}/tasks/batch/read',
   ]);
+  assert.match(hub, /export const UPDATABLE = Object\.freeze\(\{ companies: Object\.freeze\(\[LEAD_STATUS_PROP, COMPANY_DATE\]\), contacts: Object\.freeze\(\[CONTACT_DATE\]\) \}\);/);
   assert.match(hub, /credentials: 'omit'/);
 });
 

@@ -10,7 +10,16 @@
 //   POST /crm/objects/2026-09/contacts                                creazione contatto
 //   PUT  /crm/objects/2026-09/contact/{contactId}/associations/default/company/{companyId}
 //                                                                     associazione predefinita Contatto → Azienda
-// Nessun PATCH, nessuna modifica di record esistenti, nessun associationTypeId scritto a mano.
+// Outreach (primo contatto e follow-up, solo dopo «Conferma email inviata»):
+//   GET  /crm/objects/2026-09/{companies|contacts}/{id}?properties=…  lettura di stato e date di primo invio
+//   GET  /crm/properties/2026-09/{companies|contacts}/{nome}           tipo della proprietà (date o datetime)
+//   PATCH /crm/objects/2026-09/{companies|contacts}/{id}              SOLO le proprietà in UPDATABLE
+//   POST /crm/objects/2026-09/tasks                                   task di follow-up con associazioni
+//   GET  /crm/objects/2026-09/companies/{id}/associations/tasks       task già associati (nuovo tentativo)
+//   POST /crm/objects/2026-09/tasks/batch/read                        titolo e scadenza di quei task
+// Scope: crm.objects.companies.read/write e crm.objects.contacts.read/write (i task li richiedono
+// secondo la documentazione HubSpot). Nessuna cancellazione; associationTypeId solo 192 (Task → Azienda)
+// e 204 (Task → Contatto), i tipi predefiniti documentati da HubSpot.
 //
 // Un solo wrapper HTTP (request) per tutto: Authorization Bearer, Content-Type, timeout, 401, 403,
 // 404, 409, 429 con Retry-After, 5xx, errori di rete, errori di validazione 2026-09.
@@ -20,6 +29,7 @@ import {
   classifyCompanies, classifyContacts, COMPANY_FIELDS, companySummary, contactSearch, nameCompanySearch, safeRecordUrl, strongCompanySearch,
 } from './hubspotDuplicates.js';
 import { propertyLabel } from './hubspotPayload.js';
+import { COMPANY_DATE, CONTACT_DATE, LEAD_STATUS_PROP, TASK_ASSOCIATION_TYPES } from './outreach.js';
 import { cleanText, normalizeDomain } from './validation.js';
 
 export const API_BASE = 'https://api.hubapi.com';
@@ -28,6 +38,14 @@ const OBJECTS = `/crm/objects/${API_VERSION}`;
 const TIMEOUT_MS = 15000;
 const MAX_RETRIES = 2; // solo per 429 e, sulle letture, per 5xx
 const MAX_WAIT_MS = 10000;
+
+/** Le uniche proprietà che Agria Commercial modifica su record esistenti (Outreach, dopo una conferma). */
+export const UPDATABLE = Object.freeze({ companies: Object.freeze([LEAD_STATUS_PROP, COMPANY_DATE]), contacts: Object.freeze([CONTACT_DATE]) });
+const OUTREACH_COMPANY_FIELDS = ['name', LEAD_STATUS_PROP, COMPANY_DATE, 'hubspot_owner_id'];
+const OUTREACH_CONTACT_FIELDS = ['firstname', 'lastname', 'jobtitle', 'email', CONTACT_DATE];
+const TASK_FIELDS = ['hs_task_subject', 'hs_task_body', 'hs_task_type', 'hs_task_status', 'hs_task_priority', 'hs_timestamp', 'hs_task_reminders', 'hubspot_owner_id'];
+const TASK_TYPE_IDS = Object.values(TASK_ASSOCIATION_TYPES);
+const MAX_TASK_PAGES = 10;
 
 export class HubspotError extends Error {
   /**
@@ -120,6 +138,12 @@ function errorFor(status, body, { write }) {
   return new HubspotError('bad_request', `Richiesta non accettata da HubSpot (errore ${status}).${body?.message ? ` ${safeText(body.message, 160)}` : ''}`, meta);
 }
 
+// hs_timestamp letto da HubSpot: ISO 8601 o millisecondi
+const hubspotTime = (value) => {
+  const text = String(value ?? '');
+  return /^\d{10,14}$/.test(text) ? Number(text) : Date.parse(text);
+};
+
 /**
  * getToken: async () → Service Key (letta dallo storage del service worker a ogni richiesta).
  * fetchImpl, sleep, timeoutMs: sostituibili nei test (nessuna chiamata reale).
@@ -161,6 +185,29 @@ export function createHubspotClient({ getToken, fetchImpl = (...args) => globalT
 
   const search = (object, body) => request('POST', `${OBJECTS}/${object}/search`, { body, safe: true });
   const results = (data) => (Array.isArray(data?.results) ? data.results : []);
+  const numericId = (value, what) => {
+    const id = String(value ?? '');
+    if (!/^\d+$/.test(id)) throw new HubspotError('invalid_input', `ID ${what} non valido.`);
+    return id;
+  };
+  const prop = (record, name) => (typeof record?.properties?.[name] === 'string' ? record.properties[name] : '');
+
+  async function readRecord(object, id, fields, what) {
+    const record = await request('GET', `${OBJECTS}/${object}/${numericId(id, what)}`, { query: { properties: fields.join(',') } });
+    if (!record || record.archived) throw new HubspotError('not_found', `${what === 'azienda' ? 'Azienda' : 'Contatto'} non trovato in HubSpot.`);
+    return record;
+  }
+
+  // modifica di un record esistente: solo le proprietà ammesse, solo testo, mai altro
+  async function update(object, id, properties) {
+    const keys = Object.keys(properties || {});
+    const allowed = UPDATABLE[object] || [];
+    if (!keys.length || keys.some((k) => !allowed.includes(k) || typeof properties[k] !== 'string' || !properties[k])) {
+      throw new HubspotError('invalid_input', 'Modifica non ammessa: Agria Commercial aggiorna solo stato e date di primo invio.');
+    }
+    await request('PATCH', `${OBJECTS}/${object}/${numericId(id, object === 'companies' ? 'azienda' : 'contatto')}`, { body: { properties } });
+    return { ok: true };
+  }
 
   return Object.freeze({
     mode: 'real',
@@ -215,6 +262,82 @@ export function createHubspotClient({ getToken, fetchImpl = (...args) => globalT
       if (!/^\d+$/.test(from) || !/^\d+$/.test(to)) throw new HubspotError('invalid_input', 'ID non valido per l\'associazione.');
       await request('PUT', `${OBJECTS}/contact/${from}/associations/default/company/${to}`);
       return { ok: true };
+    },
+
+    // ---- Outreach ----
+
+    /** Azienda per Outreach: nome, Lead Status, data del primo invio (letti ora, mai dalla cache). */
+    async getCompanyOutreach(companyId) {
+      const record = await readRecord('companies', companyId, OUTREACH_COMPANY_FIELDS, 'azienda');
+      return {
+        id: String(record.id), name: prop(record, 'name'), leadStatus: prop(record, LEAD_STATUS_PROP), firstEmailAt: prop(record, COMPANY_DATE),
+        ownerId: prop(record, 'hubspot_owner_id'), url: safeRecordUrl(record.url, record.id),
+      };
+    },
+
+    async getContactOutreach(contactId) {
+      const record = await readRecord('contacts', contactId, OUTREACH_CONTACT_FIELDS, 'contatto');
+      return {
+        id: String(record.id), name: [prop(record, 'firstname'), prop(record, 'lastname')].filter(Boolean).join(' '), jobtitle: prop(record, 'jobtitle'),
+        email: prop(record, 'email'), firstEmailAt: prop(record, CONTACT_DATE), url: safeRecordUrl(record.url, record.id),
+      };
+    },
+
+    /** Definizione di una proprietà del portale: tipo (date, datetime, enumeration…) e valori ammessi. */
+    async getProperty(objectType, name) {
+      if (!['companies', 'contacts'].includes(objectType) || !/^[a-z0-9_]{1,100}$/.test(String(name))) throw new HubspotError('invalid_input', 'Proprietà non valida.');
+      const p = await request('GET', `/crm/properties/${API_VERSION}/${objectType}/${name}`);
+      return {
+        name: String(p?.name ?? ''), type: String(p?.type ?? ''),
+        options: Array.isArray(p?.options) ? p.options.map((o) => String(o?.value ?? '')).filter(Boolean) : [],
+      };
+    },
+
+    updateCompany: (companyId, properties) => update('companies', companyId, properties),
+    updateContact: (contactId, properties) => update('contacts', contactId, properties),
+
+    /** Task di follow-up con le sue associazioni (solo i tipi predefiniti 192 e 204). */
+    async createTask({ properties, associations }) {
+      const keys = Object.keys(properties || {});
+      const okProps = keys.length && keys.every((k) => TASK_FIELDS.includes(k) && typeof properties[k] === 'string') && properties.hs_timestamp;
+      const okAssoc = Array.isArray(associations) && associations.length >= 1 && associations.every((a) => /^\d+$/.test(String(a?.to?.id ?? ''))
+        && Array.isArray(a.types) && a.types.length === 1 && a.types[0].associationCategory === 'HUBSPOT_DEFINED' && TASK_TYPE_IDS.includes(a.types[0].associationTypeId));
+      if (!okProps || !okAssoc) throw new HubspotError('invalid_input', 'Follow-up non valido: nessuna richiesta inviata.');
+      const record = await request('POST', `${OBJECTS}/tasks`, { body: { properties, associations } });
+      if (!record?.id) throw new HubspotError('unexpected', 'Risposta di HubSpot senza ID del task.');
+      return { id: String(record.id) };
+    },
+
+    /**
+     * Task già associati all'Azienda con lo stesso titolo e la stessa scadenza: il follow-up di un
+     * tentativo precedente arrivato a HubSpot anche se la risposta si è persa. Le associazioni si
+     * leggono subito (la ricerca di HubSpot indicizza i nuovi record con qualche secondo di ritardo).
+     */
+    async findFollowUpTasks(companyId, { subject, dueAt }) {
+      const id = numericId(companyId, 'azienda');
+      const ids = [];
+      let after = '';
+      for (let page = 0; page < MAX_TASK_PAGES; page += 1) {
+        const data = await request('GET', `${OBJECTS}/companies/${id}/associations/tasks`, { query: after ? { after } : null });
+        for (const r of results(data)) {
+          const taskId = String(r?.toObjectId ?? r?.id ?? '');
+          if (/^\d+$/.test(taskId) && !ids.includes(taskId)) ids.push(taskId);
+        }
+        after = typeof data?.paging?.next?.after === 'string' ? data.paging.next.after : '';
+        if (!after) break;
+      }
+      if (after) throw new HubspotError('unexpected', 'Troppi task associati a questa Azienda: controllo non completo, nessun nuovo follow-up creato.');
+      const found = [];
+      for (let i = 0; i < ids.length; i += 100) {
+        const data = await request('POST', `${OBJECTS}/tasks/batch/read`, {
+          body: { properties: ['hs_task_subject', 'hs_timestamp', 'hubspot_owner_id'], inputs: ids.slice(i, i + 100).map((x) => ({ id: x })) }, safe: true,
+        });
+        for (const t of results(data)) {
+          const p = t?.properties || {};
+          if (String(p.hs_task_subject ?? '') === subject && hubspotTime(p.hs_timestamp) === Number(dueAt)) found.push({ id: String(t.id) });
+        }
+      }
+      return found;
     },
   });
 }

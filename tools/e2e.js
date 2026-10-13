@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPERATORS } from '../extension/lib/operators.js';
+import { followUpSchedule, formatDue } from '../extension/lib/outreachTime.js';
 import { createFakeHubspot } from '../tests/support/fakeHubspot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -257,10 +258,10 @@ async function run(context, site, fake) {
   const modules = await panel.$$eval('#view-home .module-card', (cards) => cards.map((c) => c.innerText.replace(/\s+/g, ' ').trim()));
   for (const [i, parts] of [
     [0, ['SCOUT', 'Trova, analizza e registra nuovi prospect.', 'Apri Scout']],
-    [1, ['OUTREACH', 'Gestisci primo contatto e follow-up.', 'Disponibile prossimamente', 'Arriverà nella prossima fase.']],
+    [1, ['OUTREACH', 'Gestisci primo contatto e follow-up.', 'Apri Outreach']],
     [2, ['NAVIGATORE', 'Guida operativa durante le chiamate commerciali.', 'Apri Navigatore', 'Si apre in una nuova scheda.']],
   ]) for (const part of parts) includes(`modulo ${i + 1}: ${part}`, modules[i], part);
-  check('Outreach: pulsante disattivato con spiegazione', await panel.isDisabled('#home-outreach') && (await panel.getAttribute('#home-outreach', 'aria-describedby')) === 'home-outreach-note');
+  check('Outreach attivo dalla Home', await panel.isEnabled('#home-outreach'));
   check('Home: una sola azione primaria', (await panel.$$eval('#view-home .btn.primary', (b) => b.filter((x) => x.offsetParent).length)) === 1);
   check('Home: nessuno scroll orizzontale (400 px)', await noHorizontalScroll());
   await panel.setViewportSize({ width: 320, height: 900 });
@@ -272,7 +273,10 @@ async function run(context, site, fake) {
   await panel.focus('#nav-outreach');
   await panel.keyboard.press('Enter');
   check('tastiera (Invio): Outreach', await shown('outreach') && !(await shown('home')));
-  equal('Outreach: segnaposto', (await text('#outreach-message')).trim(), 'Outreach sarà disponibile nella prossima fase.');
+  await panel.waitForSelector('#outreach-empty');
+  equal('Outreach senza prospect', (await text('#outreach-empty')).trim(), 'Nessun prospect pronto per il primo contatto.');
+  equal('Outreach senza prospect: «Vai a Scout»', (await text('#outreach-to-scout')).trim(), 'Vai a Scout');
+  check('Outreach senza prospect: niente da confermare', !(await panel.$('#outreach-confirm')));
   check('Outreach: nessuno scroll orizzontale', await noHorizontalScroll());
   await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '9c-outreach.png') });
   await panel.focus('#nav-home');
@@ -529,6 +533,13 @@ async function run(context, site, fake) {
   check('l\'owner non è nella bozza salvata', !JSON.stringify(await panel.evaluate(() => chrome.storage.session.get('draft'))).includes('hubspot_owner_id'));
 
   console.log('\nVerifica HubSpot (MOCK)');
+  // Outreach: lettura di HubSpot finita (stato mostrato) per la vista aperta
+  const waitRead = () => panel.waitForFunction(() => {
+    const s = document.querySelector('#outreach-status')?.textContent || '';
+    return !document.querySelector('#view-outreach').hidden && s !== '' && s !== 'Lettura da HubSpot…' && s !== '—';
+  }, null, { timeout: 15000 });
+  const recipients = () => panel.$$eval('#outreach-recipient .choice', (l) => l.map((x) => x.textContent.trim()));
+  const primaries = (view) => panel.$$eval(`#view-${view} .btn.primary`, (b) => b.filter((x) => x.offsetParent).map((x) => x.id));
   let v = await verify();
   check('pulsante disattivato durante la verifica (niente doppio invio)', v.disabled);
   equal('scenario "non presente"', v.kind, 'not_found');
@@ -544,6 +555,20 @@ async function run(context, site, fake) {
   equal('scenario "già presente"', v.kind, 'found');
   check('azienda simulata con il dominio', v.text.includes('agriturismo-lamora.test') && v.text.includes('MOCK-1001'), v.text);
   check('già presente: nessuna creazione possibile', await panel.isHidden('#company-step'));
+  // MOCK: anche Outreach è simulato, nessuna richiesta a HubSpot
+  await panel.waitForSelector('#scout-next-step-action');
+  includes('Scout → Outreach: «Vai al primo contatto»', await text('#scout-next-step'), 'Vai al primo contatto');
+  await panel.click('#scout-next-step-action');
+  await waitRead();
+  await panel.locator('#outreach-recipient .choice').first().click();
+  await panel.click('#outreach-confirm');
+  await panel.waitForSelector('#outreach-follow-up', { timeout: 15000 });
+  const mockOutreach = await text('#outreach-body');
+  includes('MOCK: primo contatto simulato', mockOutreach, 'Primo contatto registrato');
+  includes('MOCK: follow-up simulato', mockOutreach, 'Follow-up programmato');
+  includes('MOCK: dichiarato', mockOutreach, 'Simulazione (MOCK)');
+  equal('MOCK: nessuna richiesta a HubSpot', fake.state.requests.length, 0);
+  await panel.click('#nav-scout');
   await options.check('input[value="error"]');
   await hint('Errore HubSpot');
   v = await verify();
@@ -794,6 +819,31 @@ async function run(context, site, fake) {
   equal('race: nessuna scrittura', writes().length, postsBefore);
   check('race: nessun pulsante di creazione', await panel.isHidden('#company-step'));
 
+  console.log('\nOutreach REALE: un collega registra il primo invio prima della conferma (Perticaia)');
+  v = await verify();
+  equal('Perticaia ora è in HubSpot (record del collega)', v.kind, 'found');
+  await panel.click('#nav-home');
+  for (const part of ['Vai al primo contatto', 'Perticaia è in HubSpot: invia la prima email dal tuo account aziendale']) includes(`Home: ${part}`, await text('#next-step'), part);
+  equal('Home: «Apri Outreach»', (await text('#next-step-action')).trim(), 'Apri Outreach');
+  await panel.click('#next-step-action');
+  await waitRead();
+  includes('Outreach: Azienda', await text('#outreach-facts'), 'Perticaia');
+  equal('Outreach: stato letto da HubSpot', (await text('#outreach-status')).trim(), 'Da contattare');
+  check('nessun destinatario scelto in partenza: conferma disattivata', await panel.isDisabled('#outreach-confirm'));
+  await panel.locator('#outreach-recipient .choice').first().click();
+  check('destinatario scelto: conferma attiva', await panel.isEnabled('#outreach-confirm'));
+  const colleagueRecord = fake.state.companies.find((c) => c.id === colleague).properties;
+  colleagueRecord.data_del_primo_invio_email = '2026-10-12T07:00:00.000Z'; // il collega registra il suo invio
+  const writesBeforeColleague = writes().length;
+  await panel.click('#outreach-confirm');
+  await panel.waitForSelector('#outreach-contacted', { timeout: 15000 });
+  const colleagueView = await text('#outreach-contacted');
+  for (const part of ['Questa Azienda risulta già contattata.', '12/10/2026, 09:00']) includes(`rilettura prima di scrivere: ${part}`, colleagueView, part);
+  equal('data del collega non sovrascritta', colleagueRecord.data_del_primo_invio_email, '2026-10-12T07:00:00.000Z');
+  equal('nessuna scrittura, nessun task', writes().length, writesBeforeColleague);
+  check('nessun pulsante di conferma', !(await panel.$('#outreach-confirm')));
+  await panel.click('#nav-scout');
+
   console.log('\nHubSpot REALE: gravità dei doppioni (La Mora, dominio diverso)');
   // un solo segnale (stesso telefono): possibile duplicato, si crea solo dopo la conferma
   const sharedPhone = fake.addCompany({ name: 'Locanda Vecchia', domain: 'locandavecchia.test', phone: '393 4363917', hs_lead_status: 'CONNECTED' });
@@ -840,6 +890,23 @@ async function run(context, site, fake) {
   // il record «Agriturismo La Mora» serviva solo qui: lo stesso nome tornerebbe nel prossimo prospect
   fake.state.companies.splice(fake.state.companies.findIndex((c) => c.id === sameSite), 1);
 
+  console.log('\nOutreach REALE: Azienda già contattata (Il Poggio del Sole, Primo contatto inviato)');
+  v = await verify();
+  equal('un solo doppione certo', v.kind, 'found');
+  await panel.click('#nav-home');
+  for (const part of ['Agriturismo Il Poggio del Sole risulta già contattata', 'Stato: Primo contatto inviato']) includes(`Home: ${part}`, await text('#next-step'), part);
+  await panel.click('#next-step-action');
+  await waitRead();
+  const alreadyView = await text('#outreach-contacted');
+  for (const part of ['Questa Azienda risulta già contattata.', 'Stato attuale', 'Primo contatto inviato', 'Data primo invio', 'Non registrata', 'Prossimo passo disponibile', 'Follow-up telefonico', 'Nessun nuovo primo contatto e nessun follow-up automatico.']) {
+    includes(`già contattata: ${part}`, alreadyView, part);
+  }
+  check('già contattata: nessun «Conferma email inviata»', !(await panel.$('#outreach-confirm')));
+  check('già contattata: nessun codice tecnico', !alreadyView.includes('ATTEMPTED_TO_CONTACT'));
+  equal('già contattata: nessuna scrittura', writes().length, writesBeforeHard);
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10c-outreach-gia-contattata.png') });
+  await panel.click('#nav-scout');
+
   console.log('\nHubSpot REALE: azienda già presente (Cantina Rossi) e contatto già presente');
   const existingCompany = fake.addCompany({ name: 'Cantina Rossi', domain: 'cantinarossi.test', city: 'Foligno', hubspot_owner_id: ALESSANDRO.hubspotOwnerId, hs_lead_status: 'NEW' });
   const existingContact = fake.addContact({ firstname: 'Mario', lastname: 'Rossi', email: 'mario.rossi@cantinarossi.test', hubspot_owner_id: ALESSANDRO.hubspotOwnerId });
@@ -879,6 +946,50 @@ async function run(context, site, fake) {
   includes('contatto esistente: motivo', contactExists, 'stessa email');
   check('contatto esistente: nessuna creazione, nessuna associazione', fake.state.contacts.length === 1 && fake.state.associations.length === 0);
   check('nessuna modifica a record esistenti', fake.state.requests.every((q) => q.method !== 'PATCH' && q.method !== 'DELETE'));
+
+  console.log('\nOutreach REALE: email al Contatto, follow-up non creato e nuovo tentativo (Cantina Rossi)');
+  const patchCount = () => fake.state.requests.filter((q) => q.method === 'PATCH').length;
+  const taskCount = () => fake.state.requests.filter((q) => q.method === 'POST' && q.path === '/crm/objects/2026-09/tasks').length;
+  await panel.waitForSelector('#scout-next-step-action');
+  includes('Scout propone il primo contatto', await text('#scout-next-step'), 'Vai al primo contatto');
+  await panel.click('#scout-next-step-action');
+  await waitRead();
+  const cantinaRecipients = await recipients();
+  check('destinatari: Azienda e Contatto HubSpot', cantinaRecipients.some((r) => r.startsWith('Azienda — ')) && cantinaRecipients.includes('Mario Rossi'), JSON.stringify(cantinaRecipients));
+  await panel.locator('#outreach-recipient .choice', { hasText: 'Mario Rossi' }).click();
+  includes('anteprima: data del Contatto', await text('#outreach-preview'), 'Registra data primo invio al Contatto');
+  fake.force('POST', /\/tasks$/, fake.response.error(502, 'Bad gateway'), 1, { after: true }); // task creato, risposta persa
+  const patchesBeforeCantina = patchCount();
+  const tasksBeforeCantina = taskCount();
+  await panel.click('#outreach-confirm');
+  await panel.waitForSelector('#outreach-retry', { timeout: 15000 });
+  const partialOutreach = await text('#outreach-body');
+  includes('✓ Primo contatto registrato', partialOutreach, '✓ Primo contatto registrato');
+  includes('⚠ Follow-up non creato', partialOutreach, '⚠ Follow-up non creato');
+  equal('«Riprova creazione follow-up»', (await text('#outreach-retry')).trim(), 'Riprova creazione follow-up');
+  equal('una sola azione primaria: il nuovo tentativo', (await primaries('outreach')).join(), 'outreach-retry');
+  const cantinaRecord = fake.state.companies.find((c) => c.id === existingCompany).properties;
+  const marioRecord = fake.state.contacts.find((c) => c.id === existingContact).properties;
+  equal('CRM aggiornato: Lead Status', cantinaRecord.hs_lead_status, 'ATTEMPTED_TO_CONTACT');
+  check('CRM aggiornato: data primo invio Azienda', /^\d{4}-\d{2}-\d{2}T/.test(cantinaRecord.data_del_primo_invio_email || ''), cantinaRecord.data_del_primo_invio_email);
+  check('CRM aggiornato: data primo invio Contatto', /^\d{4}-\d{2}-\d{2}T/.test(marioRecord.data_primo_invio_email_al_contatto || ''));
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10d-outreach-follow-up-da-riprovare.png') });
+  await panel.click('#nav-home');
+  includes('Home: follow-up da riprovare', await text('#next-step'), 'Follow-up non creato');
+  await panel.click('#next-step-action');
+  await panel.waitForSelector('#outreach-retry');
+  const datesBefore = [cantinaRecord.data_del_primo_invio_email, marioRecord.data_primo_invio_email_al_contatto];
+  await panel.click('#outreach-retry');
+  await panel.waitForFunction(() => document.querySelector('#outreach-follow-up')?.textContent.includes('Follow-up programmato'), null, { timeout: 15000 });
+  equal('un solo task finale', fake.tasksOf('companies', existingCompany).length, 1);
+  equal('il nuovo tentativo non crea un secondo task', taskCount() - tasksBeforeCantina, 1);
+  equal('il nuovo tentativo non riscrive le date', patchCount() - patchesBeforeCantina, 2);
+  equal('date invariate', JSON.stringify([cantinaRecord.data_del_primo_invio_email, marioRecord.data_primo_invio_email_al_contatto]), JSON.stringify(datesBefore));
+  const cantinaTask = fake.tasksOf('companies', existingCompany)[0];
+  check('task associato all\'Azienda (192) e al Contatto (204)', fake.state.taskLinks.filter((l) => l.taskId === cantinaTask.id).map((l) => `${l.kind}:${l.id}:${l.typeId}`).join() === `companies:${existingCompany}:192,contacts:${existingContact}:204`);
+  equal('note del task con il Contatto', cantinaTask.properties.hs_task_body, 'Primo follow-up dopo email commerciale Agria System.\nContatto: Mario Rossi');
+  equal('task: owner del commerciale attivo', cantinaTask.properties.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);
+  await panel.click('#nav-scout');
 
   console.log('\nHubSpot REALE: azienda assente → Azienda, poi Contatto (errore e nuovo tentativo) e associazione');
   r = await deepScan(home);
@@ -935,13 +1046,94 @@ async function run(context, site, fake) {
   // Home: il prossimo passo segue lo stato di Scout, senza perdere nulla
   const companyBefore = await value('company-name');
   await panel.click('#nav-home');
-  for (const part of ['Azienda salvata in HubSpot', 'Agriturismo La Mora: Azienda e Contatto creati', 'Il primo contatto arriverà con Outreach.']) includes(`Home dopo la creazione: ${part}`, await text('#next-step'), part);
-  check('Home dopo la creazione: nessuna azione Outreach', !(await panel.$('#next-step-action')));
+  for (const part of ['Vai al primo contatto', 'Agriturismo La Mora è in HubSpot']) includes(`Home dopo la creazione: ${part}`, await text('#next-step'), part);
+  equal('Home dopo la creazione: «Apri Outreach»', (await text('#next-step-action')).trim(), 'Apri Outreach');
   await panel.click('#nav-scout');
   equal('ritorno a Scout: dati intatti', await value('company-name'), companyBefore);
   includes('ritorno a Scout: azienda ancora creata', await text('#company-step'), '✓ Azienda creata in HubSpot');
+  includes('Scout: passaggio a Outreach', await text('#scout-next-step'), 'Vai al primo contatto');
   await shot('5-hubspot-reale');
   await panel.locator('section.hubspot').screenshot({ path: path.join(OUT, '5b-sezione-hubspot.png') });
+
+  console.log("\nOutreach REALE: email all'Azienda, doppio clic, follow-up programmato (La Mora)");
+  await panel.click('#nav-home');
+  await panel.click('#next-step-action');
+  await waitRead();
+  equal('stato letto da HubSpot', (await text('#outreach-status')).trim(), 'Da contattare');
+  const laMoraRecipients = await recipients();
+  check('destinatari: email aziendale e Contatto', laMoraRecipients[0] === 'Azienda — info@agriturismo-lamora.test' && laMoraRecipients.some((r) => r.startsWith('Maria Bianchi')), JSON.stringify(laMoraRecipients));
+  includes('invito a inviare l\'email', await text('#outreach-body'), 'Invia ora la prima email dal tuo account aziendale.');
+  // il destinatario si sceglie anche da tastiera
+  await panel.focus('#outreach-r0');
+  await panel.keyboard.press('Space');
+  check('tastiera: destinatario scelto', await panel.isChecked('#outreach-r0'));
+  const expected = followUpSchedule(Date.now());
+  const outreachPreview = await text('#outreach-preview');
+  for (const part of ['Cosa succederà', 'Stato lead → Primo contatto inviato', 'Registra data primo invio Azienda', `Crea follow-up per ${formatDue(expected.dueAt)}`, `Assegna a ${ALESSANDRO.name}`]) includes(`anteprima: ${part}`, outreachPreview, part);
+  check('email all\'Azienda: nessuna data del Contatto in anteprima', !outreachPreview.includes('Contatto'));
+  check('anteprima senza codici HubSpot', !/ATTEMPTED_TO_CONTACT|hs_|data_del_primo/.test(await text('#outreach-body')));
+  equal('una sola azione primaria: la conferma', (await primaries('outreach')).join(), 'outreach-confirm');
+  equal('azione primaria', (await text('#outreach-confirm')).trim(), 'Conferma email inviata e crea follow-up');
+  await panel.setViewportSize({ width: 320, height: 900 });
+  check('Outreach: nessuno scroll orizzontale (320 px)', await noHorizontalScroll());
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10-outreach-primo-contatto.png') });
+  await panel.setViewportSize({ width: 400, height: 900 });
+  const patchesBeforeLaMora = fake.state.requests.filter((q) => q.method === 'PATCH').length;
+  const tasksBeforeLaMora = fake.state.requests.filter((q) => q.method === 'POST' && q.path === '/crm/objects/2026-09/tasks').length;
+  await panel.evaluate(() => {
+    const button = document.querySelector('#outreach-confirm');
+    button.click();
+    button.click(); // doppio clic
+  });
+  check('pulsante disattivato subito', await panel.evaluate(() => !document.querySelector('#outreach-confirm') || document.querySelector('#outreach-confirm').disabled));
+  await panel.waitForFunction(() => document.querySelector('#outreach-follow-up')?.textContent.includes('Follow-up programmato'), null, { timeout: 15000 });
+  equal('doppio clic: una sola scrittura dell\'Azienda', fake.state.requests.filter((q) => q.method === 'PATCH').length - patchesBeforeLaMora, 1);
+  equal('doppio clic: un solo task', fake.state.requests.filter((q) => q.method === 'POST' && q.path === '/crm/objects/2026-09/tasks').length - tasksBeforeLaMora, 1);
+  const laMora = fake.state.companies.find((c) => c.id === created.id).properties;
+  equal('Azienda: Lead Status ATTEMPTED_TO_CONTACT', laMora.hs_lead_status, 'ATTEMPTED_TO_CONTACT');
+  check('Azienda: data primo invio = ora', Math.abs(Date.parse(laMora.data_del_primo_invio_email) - Date.now()) < 120000, laMora.data_del_primo_invio_email);
+  equal('email all\'Azienda: data del Contatto non toccata', contactRecord.properties.data_primo_invio_email_al_contatto, undefined);
+  const laMoraTask = fake.tasksOf('companies', created.id)[0];
+  equal('task: titolo', laMoraTask.properties.hs_task_subject, 'FOLLOW-UP | Agriturismo La Mora');
+  equal('task: note', laMoraTask.properties.hs_task_body, 'Primo follow-up dopo email commerciale Agria System.');
+  equal('task: tipo, stato, priorità', [laMoraTask.properties.hs_task_type, laMoraTask.properties.hs_task_status, laMoraTask.properties.hs_task_priority].join(), 'CALL,NOT_STARTED,NONE');
+  equal('task: scadenza +2 giorni lavorativi alle 14:30', laMoraTask.properties.hs_timestamp, new Date(expected.dueAt).toISOString());
+  equal('task: promemoria 30 minuti prima', laMoraTask.properties.hs_task_reminders, String(expected.reminderAt));
+  equal('task: owner', laMoraTask.properties.hubspot_owner_id, ALESSANDRO.hubspotOwnerId);
+  equal('task: associato solo all\'Azienda', fake.state.taskLinks.filter((l) => l.taskId === laMoraTask.id).map((l) => `${l.kind}:${l.typeId}`).join(), 'companies:192');
+  const doneView = await text('#outreach-body');
+  for (const part of ['✓ Primo contatto registrato', 'Stato lead: Primo contatto inviato', 'Data primo invio Azienda: ', 'Destinatario: Azienda — info@agriturismo-lamora.test', '✓ Follow-up programmato', `${formatDue(expected.dueAt)} · assegnato a ${ALESSANDRO.name}`]) includes(`esito: ${part}`, doneView, part);
+  check('il focus passa all\'esito', await panel.evaluate(() => document.activeElement?.classList.contains('fb')));
+  equal('esito annunciato ai lettori di schermo', (await text('#outreach-live')).trim(), `Primo contatto registrato. Follow-up programmato per ${formatDue(expected.dueAt)}.`);
+  await panel.locator('#view-outreach').screenshot({ path: path.join(OUT, '10b-outreach-follow-up.png') });
+  // prima email al Contatto in un secondo momento: solo la sua data
+  includes('Contatto scritto dopo: proposta', doneView, 'Hai scritto anche a Maria Bianchi?');
+  const patchesBeforeMaria = fake.state.requests.filter((q) => q.method === 'PATCH').length;
+  const companyDateBefore = laMora.data_del_primo_invio_email;
+  await panel.click('#outreach-contact-date');
+  await panel.waitForSelector('#outreach-contact-date-done', { timeout: 15000 });
+  check('Contatto scritto dopo: data del Contatto registrata', Boolean(contactRecord.properties.data_primo_invio_email_al_contatto));
+  equal('Contatto scritto dopo: solo il Contatto', fake.state.requests.filter((q) => q.method === 'PATCH').slice(patchesBeforeMaria).map((q) => q.path).join(), `/crm/objects/2026-09/contacts/${contactRecord.id}`);
+  equal('Contatto scritto dopo: data Azienda invariata', laMora.data_del_primo_invio_email, companyDateBefore);
+  equal('Contatto scritto dopo: nessun nuovo follow-up', fake.tasksOf('companies', created.id).length, 1);
+  // Home: follow-up programmato; Home → Outreach → Scout → Home senza perdere nulla
+  await panel.click('#nav-home');
+  for (const part of ['Follow-up programmato', `Agriturismo La Mora: ${formatDue(expected.dueAt)} · ${ALESSANDRO.name}.`]) includes(`Home: ${part}`, await text('#next-step'), part);
+  await panel.click('#nav-outreach');
+  await waitRead();
+  includes('di nuovo in Outreach: esito conservato', await text('#outreach-body'), 'Follow-up programmato');
+  await panel.click('#nav-scout');
+  equal('Scout: dati intatti', await value('company-name'), companyBefore);
+  includes('Scout: Azienda creata ancora lì', await text('#company-step'), '✓ Azienda creata in HubSpot');
+  await panel.click('#nav-home');
+  includes('Home: ancora «Follow-up programmato»', await text('#next-step'), 'Follow-up programmato');
+  await panel.reload();
+  await panel.waitForSelector('#app:not([hidden])');
+  await panel.click('#nav-outreach');
+  await waitRead();
+  includes('pannello riaperto: esito conservato (sessione)', await text('#outreach-body'), 'Follow-up programmato');
+  equal('pannello riaperto: nessuna nuova scrittura', fake.tasksOf('companies', created.id).length, 1);
+  await panel.click('#nav-scout');
 
   console.log('\nHubSpot REALE: chiave rifiutata durante il lavoro, poi rimossa');
   fake.force('POST', /companies\/search$/, fake.response.error(401, 'expired'));
@@ -956,7 +1148,9 @@ async function run(context, site, fake) {
   check('chiave rimossa', await lineIs('#key-status', 'Nessuna Service Key configurata.'));
   check('chiave rimossa: «Configura la Service Key nelle Impostazioni.»', await blockerIs('Configura la Service Key nelle Impostazioni.'), await blocker());
   check('ogni richiesta verso HubSpot è passata dal finto server', fake.state.requests.length > 0);
-  check('solo endpoint 2026-09', fake.state.requests.every((q) => q.path.startsWith('/crm/objects/2026-09/')), JSON.stringify(fake.state.requests.map((q) => q.path)));
+  check('solo endpoint 2026-09', fake.state.requests.every((q) => /^\/crm\/(objects|properties)\/2026-09\//.test(q.path)), JSON.stringify(fake.state.requests.map((q) => q.path)));
+  check('nessuna cancellazione', fake.state.requests.every((q) => q.method !== 'DELETE'));
+  check('modifiche solo su stato e date di primo invio', fake.state.requests.filter((q) => q.method === 'PATCH').every((q) => Object.keys(q.body.properties).every((k) => ['hs_lead_status', 'data_del_primo_invio_email', 'data_primo_invio_email_al_contatto'].includes(k))));
 
   console.log('\nBase giuridica di sessione: il cambio di commerciale la azzera');
   check('base di sessione attiva prima del cambio', await panel.isChecked('#session-legal-basis'));

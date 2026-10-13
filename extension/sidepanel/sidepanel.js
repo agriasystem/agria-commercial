@@ -2,7 +2,8 @@
 // solo la sua scelta; poi la shell (shell/shell.js): Home, Scout, Outreach e il Navigatore in una
 // scheda ampia. Questo file è il modulo Scout: scansione del sito del prospect, form Azienda e
 // Contatto con le proprietà HubSpot, persone e dati rilevati, sezione HubSpot (verifica e creazione,
-// vedi hubspotPanel.js: passa sempre dal service worker, che custodisce la Service Key).
+// vedi hubspotPanel.js: passa sempre dal service worker, che custodisce la Service Key). Tiene la
+// bozza del prospect, l'unica fonte da cui leggono anche Outreach (modules/outreach) e la Home.
 
 import { analyzeSnapshot } from '../lib/parser.js';
 import { pageTypeOf } from '../lib/discovery.js';
@@ -19,8 +20,9 @@ import { isValidEmail, isValidPhone, normalizeDomain, normalizeLinkedin, normali
 import { loadConfig, normalizeConfig, onConfigChange } from '../lib/config.js';
 import { loadActiveOperator, onOperatorChange, OPERATORS, selectOperator } from '../lib/operators.js';
 import { createHubspotPanel } from './hubspotPanel.js';
-import { createShell } from '../shell/shell.js';
-import { scoutNextStep } from '../lib/nextStep.js';
+import { createShell, nextStepCard } from '../shell/shell.js';
+import { nextStep as computeNextStep } from '../lib/nextStep.js';
+import { createOutreachPanel } from '../modules/outreach/outreachPanel.js';
 import { PageReadError, readActivePage, readDownloadedPage } from './pageReader.js';
 import {
   allDataGroups, alternatives, contactReadiness, el, fieldMeta, pagesList, peopleCards,
@@ -52,6 +54,7 @@ let busy = ''; // '' | 'scan' | 'analyze'
 let scanController = null;
 let hub = null; // sezione HubSpot (hubspotPanel.js)
 let shell = null; // navigazione fra i moduli (shell/shell.js)
+let outreach = null; // vista Outreach (modules/outreach/outreachPanel.js)
 let saveTimer = null;
 let clearTimer = null;
 
@@ -224,7 +227,26 @@ function refreshHome() {
 }
 
 function nextStep() {
-  return operator ? scoutNextStep(draft, { mode: hub.mode, sessionLegalBasis }) : null;
+  return operator ? computeNextStep(draft, { mode: hub.mode, sessionLegalBasis, outreach: outreach?.snapshot() }) : null;
+}
+
+// in Scout, quando l'Azienda è in HubSpot: il passaggio a Outreach (primario solo se Scout non ne ha già uno)
+function renderHandoff() {
+  const step = nextStep();
+  const box = $('#scout-next-step');
+  if (!shell || !step || step.action?.target !== 'outreach') {
+    box.replaceChildren();
+    return;
+  }
+  const createContact = $('#create-contact');
+  box.replaceChildren(nextStepCard(step, shell.go, { id: 'scout-next-step', primary: !(createContact && !createContact.disabled) }));
+}
+
+// dopo ogni disegno della sezione HubSpot: passaggio a Outreach, vista Outreach e Home allineati
+function afterHubspotRender() {
+  renderHandoff();
+  outreach?.render();
+  refreshHome();
 }
 
 function onEdit(section, name, value) {
@@ -493,9 +515,29 @@ async function init() {
     getOperator: () => operator,
     getSessionLegalBasis: () => sessionLegalBasis,
     needsOperator,
+    afterRender: afterHubspotRender,
+  });
+  outreach = createOutreachPanel({
+    $,
+    getDraft: () => draft,
+    getOperator: () => operator,
+    getHubspot: () => hub.status,
+    onNavigate: (view) => shell.show(view, { focus: true }),
+    onChange: () => {
+      renderHandoff();
+      refreshHome();
+    },
   });
   buildSessionLegalBasis();
-  shell = createShell({ $, nextStep, onView: () => hub.render() });
+  shell = createShell({
+    $,
+    nextStep,
+    onView: (view) => {
+      hub.render();
+      if (view === 'outreach') outreach.show();
+      else outreach.hide();
+    },
+  });
   onConfigChange((next) => {
     // un altro scenario MOCK o un'altra modalità: la verifica fatta prima non vale più
     if (next.hubspot.mode !== config.hubspot.mode || next.hubspot.mockScenario !== config.hubspot.mockScenario) hub.dataChanged();
@@ -516,6 +558,7 @@ async function init() {
   const saved = await chrome.storage.session.get('draft').catch(() => ({}));
   draft = refreshForms(restoreDraft(saved.draft));
   await hub.init();
+  outreach.init();
   await shell.init(); // la vista aperta prima in questa sessione, altrimenti la Home
   renderAll();
   applyOperator(operator);

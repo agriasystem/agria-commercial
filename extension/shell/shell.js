@@ -7,19 +7,22 @@
 import { el } from '../ui/dom.js';
 import { TONES } from '../ui/feedback.js';
 import { openNavigator } from '../modules/navigator/navigator.js';
-import { OUTREACH } from '../modules/outreach/outreach.js';
 
 export const VIEWS = Object.freeze(['home', 'scout', 'outreach']);
 const VIEW_KEY = 'shellView';
 
-/** Componente «Prossimo passo»: { tone, title, detail, action: { label, target } | null } (vedi lib/nextStep.js). */
-export function nextStepCard(step, onAction) {
+/**
+ * Componente «Prossimo passo»: { tone, title, detail, action: { label, target } | null } (vedi
+ * lib/nextStep.js). id: prefisso degli id (la Home usa «next-step», Scout «scout-next-step»);
+ * primary: il pulsante è l'azione principale della vista.
+ */
+export function nextStepCard(step, onAction, { id = 'next-step', primary = true } = {}) {
   const tone = Object.hasOwn(TONES, step.tone) ? step.tone : 'info';
-  return el('section', { class: 'next-step', 'data-tone': tone, 'aria-labelledby': 'next-step-title' },
+  return el('section', { class: 'next-step', 'data-tone': tone, 'aria-labelledby': `${id}-title` },
     el('p', { class: 'next-step-label' }, 'Prossimo passo'),
-    el('h3', { id: 'next-step-title', class: 'next-step-title' }, el('span', { class: 'fb-icon', 'aria-hidden': 'true' }, TONES[tone]), ' ', step.title),
+    el('h3', { id: `${id}-title`, class: 'next-step-title' }, el('span', { class: 'fb-icon', 'aria-hidden': 'true' }, TONES[tone]), ' ', step.title),
     step.detail ? el('p', { class: 'next-step-detail' }, step.detail) : null,
-    step.action ? el('button', { id: 'next-step-action', type: 'button', class: 'btn primary', onclick: () => onAction(step.action.target) }, step.action.label) : null);
+    step.action ? el('button', { id: `${id}-action`, type: 'button', class: primary ? 'btn primary' : 'btn', onclick: () => onAction(step.action.target) }, step.action.label) : null);
 }
 
 /**
@@ -29,9 +32,11 @@ export function nextStepCard(step, onAction) {
 export function createShell({ $, onView = () => {}, nextStep = () => null }) {
   let current = 'home';
 
+  const go = (target) => (target === 'navigator' ? openNavigator() : show(target, { focus: true }));
+
   function renderHome() {
     const step = nextStep();
-    $('#next-step').replaceChildren(...(step ? [nextStepCard(step, (target) => (target === 'navigator' ? openNavigator() : show(target, { focus: true })))] : []));
+    $('#next-step').replaceChildren(...(step ? [nextStepCard(step, go)] : []));
   }
 
   /** Mostra una vista; focus: sposta il focus sul suo titolo (utile da tastiera dopo un'azione). */
@@ -53,11 +58,12 @@ export function createShell({ $, onView = () => {}, nextStep = () => null }) {
     show,
     get current() { return current; },
     renderHome,
+    /** Apre la vista di un'azione del Prossimo passo (scout, outreach, navigator). */
+    go,
     /** Collega navigazione e Home; torna alla vista aperta prima (in questa sessione), altrimenti alla Home. */
     async init() {
       for (const button of document.querySelectorAll('[data-view]')) button.addEventListener('click', () => show(button.dataset.view, { focus: button.closest('#module-nav') == null }));
       for (const button of document.querySelectorAll('[data-open="navigator"]')) button.addEventListener('click', () => openNavigator());
-      $('#outreach-message').textContent = OUTREACH.message;
       const saved = (await chrome.storage.session.get(VIEW_KEY).catch(() => ({})))[VIEW_KEY];
       show(VIEWS.includes(saved) ? saved : 'home', { remember: false });
     },
