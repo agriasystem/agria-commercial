@@ -55,13 +55,15 @@ un'operazione il pulsante è disattivato (`aria-busy`), quindi niente doppi invi
 
 ## Navigatore: fonte unica e aggiornamento
 
-La **fonte** del Navigatore è il suo repository, `../navigatore-agria-sorgenti/navigatore-agria`, e
-in particolare il file buildato `dist/navigatore-chiamata-agria.html`. Agria Commercial non lo modifica
-e non ha una seconda versione da modificare: in `extension/modules/navigator/app/` c'è una **copia
-generata**, da non toccare a mano.
+La **fonte** del Navigatore è il suo repository, nel worktree del Navigator 2.0
+`../navigatore-agria-sorgenti/navigatore-agria-2.0` (branch `navigator-2.0-core`; non il worktree del
+Live Copilot), e in particolare il file buildato `dist/navigatore-chiamata-agria.html`. Agria Commercial
+non lo modifica e non ha una seconda versione da modificare: in `extension/modules/navigator/app/` c'è
+una **copia generata**, da non toccare a mano.
 
-- Baseline inclusa: commit **7c02185** (scritto in `app/navigatore.source.json` con l'impronta SHA-256
-  del file buildato e di ogni file della copia).
+- Versione inclusa: **Navigator 2.0**, commit **5e17aa5** «Navigator 2.0 - Add contact capture and
+  proposal branch» (scritto in `app/navigatore.source.json` con l'impronta SHA-256 del file buildato e
+  di ogni file della copia). Prima era inclusa la V1, commit 7c02185 (`navigatore-agria`, branch `master`).
 - Unica trasformazione: Manifest V3 non esegue script inline nelle pagine di un'estensione, quindi i due
   blocchi `<script>` della pagina diventano `navigatore-1.js` (contenuti) e `navigatore-2.js` (motore),
   identici carattere per carattere e nello stesso punto. Il resto della pagina è invariato; il

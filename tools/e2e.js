@@ -298,9 +298,12 @@ async function run(context, site, fake) {
   check('Navigatore: nuova scheda dell\'estensione', navigator.url().endsWith('/modules/navigator/app/navigatore.html'), navigator.url());
   equal('Navigatore: titolo', await navigator.title(), 'Navigatore Chiamata Agria');
   await navigator.setViewportSize({ width: 1280, height: 900 });
-  await navigator.waitForFunction(() => document.body.innerText.includes('Prima di chiamare'));
-  for (const part of ['Navigatore chiamata', 'Preparazione', 'Prima di chiamare', 'Inizia la chiamata']) includes(`Navigatore: ${part}`, await navigator.evaluate(() => document.body.innerText), part);
-  check('Navigatore: contenuti caricati', await navigator.evaluate(() => Array.isArray(window.AGRIA?.phases) || typeof window.AGRIA?.nodes === 'object'));
+  // Navigator 2.0: la preparazione la disegna il motore (navigatore-2.js), quindi gli script girano
+  await navigator.waitForFunction(() => document.body.innerText.includes('Prossima azienda'));
+  const navigatorText = (await navigator.evaluate(() => document.body.innerText)).toLowerCase(); // etichette in maiuscolo dal CSS
+  for (const part of ['Navigatore chiamata', 'Prima chiamata di follow-up', 'Preparazione', 'Prossima azienda', 'Inizia chiamata']) includes(`Navigatore: ${part}`, navigatorText, part.toLowerCase());
+  check('Navigatore: motore 2.0 caricato', await navigator.evaluate(() => typeof window.AGRIA_NAV?.state === 'function'));
+  check('Navigatore: schede di approfondimento caricate', await navigator.evaluate(() => Array.isArray(window.AGRIA?.phases) || typeof window.AGRIA?.nodes === 'object'));
   await navigator.evaluate(() => localStorage.setItem('agria-e2e-prova', 'ok'));
   await navigator.reload();
   equal('Navigatore: i dati restano nel browser (localStorage)', await navigator.evaluate(() => localStorage.getItem('agria-e2e-prova')), 'ok');

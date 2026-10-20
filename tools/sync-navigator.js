@@ -1,8 +1,10 @@
 // Copia del Navigatore Chiamata Agria dentro Agria Commercial.
 //
 // Fonte unica (source of truth): il repository del Navigatore, di cui si usa SOLO il file buildato
-// dist/navigatore-chiamata-agria.html. Il repository si legge e basta: nessun file viene scritto o
-// modificato là dentro (la verifica della build gira in .tmp/ di questo progetto, ignorata da git).
+// dist/navigatore-chiamata-agria.html così com'è nel commit (HEAD), non come è su disco: con
+// core.autocrlf il checkout su Windows aggiunge CR che nel commit non ci sono. Il repository si legge
+// e basta: nessun file viene scritto o modificato là dentro (la verifica della build gira in .tmp/ di
+// questo progetto, ignorata da git).
 //
 // Perché una copia trasformata: la pagina autonoma ha due blocchi <script> inline, e Chrome (Manifest
 // V3) non esegue script inline nelle pagine di un'estensione. La copia sposta il contenuto di ciascun
@@ -23,7 +25,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'extension', 'modules', 'navigator', 'app');
-const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'navigatore-agria-sorgenti', 'navigatore-agria');
+// Navigator 2.0: il worktree del branch navigator-2.0-core (non quello del Live Copilot)
+const DEFAULT_SOURCE = path.resolve(ROOT, '..', 'navigatore-agria-sorgenti', 'navigatore-agria-2.0');
 const BUILT = 'dist/navigatore-chiamata-agria.html';
 export const PAGE = 'navigatore.html';
 export const SCRIPTS = ['navigatore-1.js', 'navigatore-2.js'];
@@ -51,15 +54,18 @@ export function joinPage(page, scripts) {
 
 const git = (source, ...args) => execFileSync('git', ['-C', source, ...args], { encoding: 'utf8' }).trim();
 
-// la build dei sorgenti, fatta in una cartella temporanea dentro questo progetto: deve dare esattamente
-// il file in dist/
+/** Un file del Navigatore com'è nel commit HEAD, byte per byte (nessuna conversione dei fine riga). */
+export const committedFile = (source, file) => execFileSync('git', ['-C', source, 'cat-file', 'blob', `HEAD:${file}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+
+// la build dei sorgenti del commit, fatta in una cartella temporanea dentro questo progetto: deve dare
+// esattamente il file in dist/ dello stesso commit
 function buildMatchesDist(source, built) {
   fs.mkdirSync(path.join(ROOT, '.tmp'), { recursive: true });
   const tmp = fs.mkdtempSync(path.join(ROOT, '.tmp', 'navigatore-build-'));
   try {
     fs.mkdirSync(path.join(tmp, 'src'));
     // anche il package.json del Navigatore: la build gira con le sue regole (CommonJS), non con le nostre
-    for (const f of ['package.json', 'build.js', 'src/page.html', 'src/data.js']) fs.copyFileSync(path.join(source, f), path.join(tmp, f));
+    for (const f of ['package.json', 'build.js', 'src/page.html', 'src/data.js', 'src/flow.js', 'src/core.js']) fs.writeFileSync(path.join(tmp, f), committedFile(source, f));
     execFileSync(process.execPath, ['build.js'], { cwd: tmp, stdio: 'ignore' });
     return fs.readFileSync(path.join(tmp, BUILT), 'utf8') === built;
   } finally {
@@ -73,13 +79,13 @@ function main() {
   const source = args.includes('--source') ? path.resolve(args[args.indexOf('--source') + 1]) : DEFAULT_SOURCE;
   const commit = git(source, 'rev-parse', '--short', 'HEAD');
   if (git(source, 'status', '--porcelain')) throw new Error(`il repository del Navigatore ha modifiche non registrate: ${source}`);
-  const built = fs.readFileSync(path.join(source, BUILT), 'utf8');
+  const built = committedFile(source, BUILT);
   if (!buildMatchesDist(source, built)) throw new Error(`${BUILT} non corrisponde ai sorgenti: ricompilalo nel repository del Navigatore`);
   const { page, scripts } = splitPage(built);
   if (joinPage(page, scripts) !== built) throw new Error('la copia non ricompone la pagina originale');
   const info = {
     name: 'Navigatore Chiamata Agria',
-    sourceRepository: 'navigatore-agria-sorgenti/navigatore-agria',
+    sourceRepository: 'navigatore-agria-sorgenti/navigatore-agria-2.0',
     commit,
     sourceFile: BUILT,
     sourceSha256: sha256(built),

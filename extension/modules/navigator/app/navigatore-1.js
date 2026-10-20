@@ -1,3 +1,4 @@
+/* ── src/data.js ── */
 /* Copione follow-up telefonico — Agria System (v10 · script di Matteo, 8 ottobre 2026)
    Segnaposto nei testi:
    {azienda} {commerciale} {zona} {dataEmail} {dettaglio}   → compilati prima della chiamata (obbligatori)
@@ -1752,3 +1753,1096 @@ ref: {
   }
 }
 };
+
+/* ── src/flow.js ── */
+/* Navigator 2.0 · prima chiamata di follow-up dopo l'email commerciale — CONTENUTI
+   Percorso principale: PREPARAZIONE → AGGANCIO → RISPOSTA / FILTRO → PROSSIMO PASSO → ESITO → SALVA E PROSSIMA AZIENDA.
+   L'obiettivo della chiamata è il prossimo passo corretto nel minor tempo possibile (30–90 secondi nella maggior parte dei casi),
+   in quest'ordine di valore: appuntamento · analisi + ricontatto · analisi · richiamata · referente · riattivazione futura · chiusura ordinata.
+   Le schede della versione precedente (src/data.js) restano come rete di sicurezza: si aprono da SOS e dalla ricerca.
+
+   Qui stanno solo i testi e i collegamenti; il funzionamento è in src/core.js, la grafica in src/page.html.
+
+   REGOLE DEL PARLATO (il commerciale legge durante una telefonata vera):
+     · una scheda = UNA battuta completa da dire, in un solo blocco. Le varianti (Umbria / fuori Umbria, settore) sono
+       logica interna: a schermo ne compare sempre una sola, mai pezzi facoltativi da scegliere o da collegare;
+     · ritmo: stimolo → battuta breve → il commerciale si ferma → il cliente risponde → nuova decisione;
+     · non ogni scheda porta alla videocall: alcune rispondono e lasciano parlare il cliente;
+     · niente scuse per la chiamata («non la trattengo», «le rubo un minuto», «nessun problema», «senza disturbarla»).
+   Nei testi «\n\n» va a capo dentro lo stesso blocco.
+
+   IL NOME DELL'INTERLOCUTORE (askName sulla scheda): prima si chiede «…con chi ho il piacere di parlare?» e sotto compare
+   il campo «Nome interlocutore»; la battuta della scheda compare appena il commerciale scrive il nome, già con il nome dentro
+   (Invio o «Prosegui senza nome» se non lo dice: il nome non è mai obbligatorio). Se il nome è già noto, o la domanda è già
+   stata fatta in questa chiamata, non si chiede di nuovo e la battuta compare subito. Il nome resta per tutta la chiamata
+   (anche con SOS e Indietro) e finisce nell'esito come contact.name. Nelle battute si usa una volta sola ({nomeUnaVolta}),
+   poi di nuovo nella chiusura ({nome}): mai in ogni frase.
+
+   Segnaposto nei testi (stessa sintassi di src/data.js):
+     {saluto} {congedo}      → «Buongiorno» fino alle 14:29 / «Buonasera» dalle 14:30; «buona giornata» / «buona serata» (ora italiana)
+     {commerciale} {azienda} → dalla preparazione
+     {sede}                  → da dove chiamiamo: «Perugia» per le aziende in Umbria, «Milano» per tutte le altre (automatico, dalla preparazione)
+     {giornoEmail}           → quando è partita la prima email: «due giorni fa», altrimenti la data parlata («l'8 ottobre», «il 1° ottobre»)
+     {emerso}                → la frase dell'analisi (analysisFinding) che completa «…è emerso che»
+     {slot1} {slot2}         → le due disponibilità scelte in preparazione
+     {quando}                → giorno / ora / periodo segnati durante la chiamata, detto a voce («domani nel pomeriggio»)
+     {quandoData}            → lo stesso con la data sempre completa («venerdì 16 ottobre nel pomeriggio»): per i promemoria
+     {canaleFrase}           → «via email» oppure «su WhatsApp»
+     {appuntamento}          → «ci sentiamo in videocall giovedì 16 ottobre alle 10» / «ci vediamo di persona…»
+     {referente} {nome}      → nome del referente indicato / della persona con cui si parla (nelle chiusure: «Perfetto{ nome|}, allora…»)
+     {nomeUnaVolta}          → la persona con cui si parla, ma solo la prima volta che il nome compare in una battuta: dopo resta vuoto
+     {x|testo}               → se x manca si legge «testo»; [[a|b|c]] → variante per settore (agriturismo|cantina|frantoio)
+   when:{umbria:true|false} {quando:true} {canale:true} → la battuta, il pulsante o il campo compare in base ai dati
+   when:{problemSaid:true|false} → la frase dell'analisi è già stata detta in una scheda precedente (si segna quando si lascia
+     una scheda che la mostra): serve a non farla leggere due volte
+   when:{askingName:true|false} → in questa scheda si sta chiedendo il nome
+
+   Schede: say (le varianti della battuta), askName (la domanda del nome, prima della battuta), hintBefore (indicazione NON
+   detta, sopra la battuta), pause:true (dopo la battuta: «Adesso ascolta la risposta», non detto), captures (campi da
+   segnare, anche con when), options, setOnEnter:{percorso:valore} (dato registrato appena si arriva sulla scheda).
+   Pulsanti (options): id stabile (usato dai test e dall'esito), label, tone, e poi UNO tra:
+     to:"nodo"            → passa alla scheda
+     outcome:"CODICE"     → chiude sulla schermata Esito con quel codice (src/core.js, OUTCOME_CODES)
+     slot:1|2             → appuntamento sulla disponibilità 1 o 2 (l'etichetta è la disponibilità stessa)
+     sos:true             → apre l'SOS «altra risposta», la conversazione resta dov'è
+   set:{percorso:valore}  → dati dell'esito registrati dal pulsante; reason:"CODICE" → motivo / percorso
+   note:"testo {x}"       → riga aggiunta alla nota dell'esito, solo se i dati della riga ci sono
+   requires:[[a,b],[c]]   → il pulsante si accende quando è compilato almeno un campo di ogni gruppo
+   tone: go = avanzamento reale (verde) · wait = rinvio o barriera recuperabile (arancione) · stop = rifiuto (rosso) · op = operativo (grigio)
+*/
+(function(root){
+
+/* ── battute e pulsanti riutilizzati ── */
+const FINDING="dall'analisi della vostra azienda è emerso che {emerso}.";
+/* la proposta di approfondire: corta, senza date (le disponibilità arrivano solo se il cliente accetta) */
+const proposal=lead=>[
+  {text:lead+"\n\nPer me potremmo vederci oppure fissare una videocall.", when:{umbria:true}},
+  {text:lead+"\n\nPer me potremmo fissare una videocall.", when:{umbria:false}}
+];
+const PRICE_TEXT="Dipende da cosa vi serve davvero.\n\nPer questo prima vediamo l'analisi insieme, e poi le facciamo una proposta precisa, per iscritto.";
+const PARTNER_TEXT="Certo, è giusto parlarne insieme.\n\nSe vuole le invio l'analisi così la guardate con calma, oppure fissiamo una videocall in cui ci siete entrambi.";
+/* la proposta dopo il punto emerso: videocall, e in Umbria anche l'incontro conoscitivo */
+const MEETING_ASK=what=>({
+  umbria:"Le andrebbe di fissare una videocall, oppure un incontro conoscitivo visto che siete qui in Umbria, così vi mostriamo "+what+" e capiamo se ci sono i presupposti per una collaborazione?",
+  fuori:"Le andrebbe di fissare una videocall, così vi mostriamo "+what+" e capiamo se ci sono i presupposti per una collaborazione?"
+});
+/* quattro varianti: frase dell'analisi non ancora detta (la si dice qui) oppure già detta (non si ripete) × Umbria sì / no */
+const findingProposal=(withFinding,afterFinding,what)=>{ const m=MEETING_ASK(what); return [
+  {text:withFinding+"\n\n"+m.umbria, when:{problemSaid:false, umbria:true}},
+  {text:withFinding+"\n\n"+m.fuori, when:{problemSaid:false, umbria:false}},
+  {text:afterFinding+"\n\n"+m.umbria, when:{problemSaid:true, umbria:true}},
+  {text:afterFinding+"\n\n"+m.fuori, when:{problemSaid:true, umbria:false}}
+]; };
+/* la domanda del nome quando il cliente chiede di più già dall'apertura */
+const ASK_NAME_MORE="Volentieri, con chi ho il piacere di parlare?";
+
+const SOS_OPT={id:"sos", label:"Altra risposta / SOS", tone:"op", sos:true};
+const ACCEPT={id:"accept", label:"Va bene / Quando?", hint:"scegli il giorno", tone:"go", to:"schedule"};
+const SEND_FIRST={id:"sendFirst", label:"Prima mi mandi l'analisi", tone:"op", to:"sendMaterial"};
+const NOT_NOW={id:"notNow", label:"Non è il momento / siamo in stagione", tone:"wait", to:"timing", reason:"NOT_NOW"};
+const NOT_INTERESTED={id:"notInterested", label:"Non mi interessa", tone:"stop", to:"notInterested", reason:"NOT_INTERESTED"};
+const DO_NOT_CONTACT={id:"doNotContact", label:"Non ricontattatemi", tone:"stop", outcome:"DO_NOT_CONTACT", reason:"DO_NOT_CONTACT"};
+const HAS_PROVIDER={id:"hasProvider", label:"Abbiamo già chi ci segue / un'agenzia", tone:"wait", to:"provider", reason:"HAS_PROVIDER"};
+const SEND_SOMETHING={id:"sendSomething", label:"Mandatemi qualcosa", tone:"op", to:"sendMaterial", reason:"SEND_MATERIAL"};
+const PRICE={id:"price", label:"Quanto costa?", tone:"op", to:"price"};
+const channelOpts=to=>[
+  {id:"yesEmail", label:"Sì, email", tone:"go", to, set:{"material.requested":true, "material.channel":"email"}},
+  {id:"yesWhatsapp", label:"Sì, WhatsApp", tone:"go", to, set:{"material.requested":true, "material.channel":"whatsapp"}}
+];
+/* i pulsanti dell'aggancio: gli stessi servono quando il centralino passa la chiamata al referente */
+const HOOK_OPTS=[
+  {id:"rightPerson", label:"Sì, sono io / Mi dica", tone:"go", to:"interest", reason:"INTERESTED"},
+  {id:"explain", label:"Cosa intendete? / Mi spieghi meglio", tone:"go", to:"explain", reason:"ASKED_FINDINGS"},
+  {id:"interesting", label:"Interessante / Cosa potreste fare?", tone:"go", to:"interesting", reason:"INTERESTED"},
+  {id:"whatDetected", label:"Cosa avete rilevato?", tone:"go", to:"findings", reason:"ASKED_FINDINGS"},
+  NOT_NOW,
+  HAS_PROVIDER,
+  {id:"hasContract", label:"Abbiamo un contratto", tone:"wait", to:"contract", reason:"CONTRACT"},
+  NOT_INTERESTED,
+  DO_NOT_CONTACT,
+  {id:"notSeen", label:"Non ho visto l'email", tone:"op", to:"notSeen", reason:"EMAIL_NOT_SEEN"},
+  {id:"busy", label:"Sono impegnato", tone:"op", to:"busy", reason:"BUSY"},
+  {id:"otherPerson", label:"Se ne occupa un'altra persona", tone:"op", to:"referral", reason:"WRONG_PERSON"},
+  SEND_SOMETHING,
+  {id:"noAnswer", label:"Segreteria / nessuna risposta", tone:"op", to:"noContact", reason:"NO_CONTACT"}
+];
+/* dopo la frase dell'analisi il commerciale si ferma: queste sono le risposte plausibili del cliente */
+const FINDING_OPTS=[
+  {id:"explain", label:"Cosa intendete? / Mi spieghi meglio", tone:"go", to:"explain"},
+  {id:"interesting", label:"Interessante / Cosa potreste fare?", tone:"go", to:"interesting"},
+  {id:"knew", label:"Sì, lo sapevamo", tone:"op", to:"knew"},
+  {id:"didntKnow", label:"No, non lo sapevamo", tone:"op", to:"didntKnow"},
+  {id:"differently", label:"Da noi funziona diversamente", tone:"wait", to:"differently"},
+  HAS_PROVIDER,
+  NOT_NOW,
+  NOT_INTERESTED,
+  PRICE,
+  SEND_SOMETHING,
+  SOS_OPT
+];
+/* quando la frase arriva prima di sapere se è la persona giusta («Cosa avete rilevato?», «Non ho visto l'email»):
+   tra le risposte serve anche «se ne occupa un'altra persona», per non perdere il percorso «Glielo passa» */
+const FINDING_OPTS_UNCONFIRMED=[...FINDING_OPTS.slice(0,-1), {id:"otherPerson", label:"Non sono io / se ne occupa un'altra persona", tone:"op", to:"referral", reason:"WRONG_PERSON"}, SOS_OPT];
+/* dopo «Le andrebbe di fissare una videocall…»: stato POST-PROPOSTA, non più le risposte dell'apertura.
+   «Sì» in Umbria chiede videocall o incontro, fuori Umbria è videocall; poi la schermata giorno / ora. */
+const POST_PROPOSAL_OPTS=[
+  {id:"agree", label:"Sì / Va bene / Organizziamoci", tone:"go", to:"meetingType", when:{umbria:true}},
+  {id:"agreeVideo", label:"Sì / Va bene / Organizziamoci", tone:"go", to:"schedule", set:{"appointmentType":"video"}, when:{umbria:false}},
+  {id:"proposesTime", label:"Propone già un giorno o un orario", tone:"go", to:"appointmentDirect"},
+  {id:"notNow", label:"Più avanti / Non è il momento", tone:"wait", to:"timing", reason:"NOT_NOW"},
+  {id:"reportFirst", label:"Prima mandatemi il report", tone:"wait", to:"sendMaterial"},
+  {id:"partner", label:"Devo parlarne con il socio / responsabile", tone:"wait", to:"partner"},
+  {id:"notInterested", label:"Non mi interessa / Lasciamo stare", tone:"stop", to:"notInterested", reason:"NOT_INTERESTED"},
+  SOS_OPT
+];
+/* giorno / ora / fascia della richiamata: le scorciatoie compilano due campi con un tocco */
+const CALLBACK_CAPS=[
+  {kind:"quick", label:"Scorciatoie", chips:[
+    {label:"Oggi pomeriggio", set:{"when.date":"@today", "when.time":"", "when.period":"nel pomeriggio"}},
+    {label:"Domani mattina", set:{"when.date":"@tomorrow", "when.time":"", "when.period":"in mattinata"}},
+    {label:"Domani pomeriggio", set:{"when.date":"@tomorrow", "when.time":"", "when.period":"nel pomeriggio"}}
+  ]},
+  {path:"when.date", kind:"dayNext", label:"Giorno"},
+  {path:"when.time", kind:"time", label:"Ora"},
+  {path:"when.period", kind:"period", label:"Oppure fascia", placeholder:"nel pomeriggio", chips:["in mattinata","nel pomeriggio","in serata","in settimana"]}
+];
+const SAVE_CALLBACK={id:"saveCallback", label:"Segna la richiamata", tone:"wait", outcome:"CALLBACK", requires:[["when.date","when.time","when.period"]]};
+
+const FLOW={
+  version:"2.0.0",
+  start:"hook",
+  stages:{hook:"Aggancio", finding:"Il punto emerso", reply:"Risposta", next:"Prossimo passo"},
+
+  nodes:{
+
+  /* ───────────── AGGANCIO ─────────────
+     Ci si presenta (da Perugia per le aziende in Umbria, da Milano per le altre: lo decide {sede}, non il commerciale),
+     si richiama l'email, si chiarisce che non siamo un'agenzia di marketing, si dà il motivo della chiamata e si chiede chi
+     gestisce la parte tecnologica. Il punto emerso NON si dice ancora. */
+  hook:{ stage:"hook", title:"Apertura",
+    say:[{text:"{saluto}, sono {commerciale} di Agria System, le chiamo da {sede}.\n\nLe ho inviato un'email {giornoEmail} sulla vostra rete digitale.\n\nA scanso di equivoci: non siamo un'agenzia di marketing, ma una tech company specializzata solo nel vostro settore.\n\nLa chiamo perché oggi i concorrenti automatizzano i processi per ridurre i costi, e l'obiettivo è evitare che la vostra struttura resti indietro o perda terreno.\n\nÈ lei che gestisce la parte tecnologica o c'è un responsabile IT?"}],
+    options:HOOK_OPTS
+  },
+  /* il centralino passa la chiamata: riapertura corta, anche qui prima si identifica la persona */
+  transfer:{ stage:"hook", title:"Le hanno passato il referente",
+    say:[{text:"{saluto}, sono {commerciale} di Agria System.\n\nLe hanno appena passato la chiamata perché avevo scritto alla vostra azienda nei giorni scorsi, a seguito di un'analisi della vostra rete digitale.\n\nÈ lei che segue questi aspetti?"}],
+    options:HOOK_OPTS
+  },
+
+  /* ───────────── IL PUNTO EMERSO ─────────────
+     Una sola frase, poi il commerciale si ferma e ascolta. Nessuna proposta, nessuna data nello stesso blocco.
+     La frase risulta detta (flags.problemSaid) quando si lascia la scheda che la mostra, anche verso l'SOS o un approfondimento. */
+  /* «Sì, sono io»: prima il nome, poi la frase (se il nome è già noto, per esempio dopo «Glielo passa», la frase subito) */
+  interest:{ stage:"finding", title:"«Sì, sono io» · il punto emerso", pause:true,
+    askName:"Perfetto, con chi ho il piacere di parlare?",
+    say:[
+      {text:"Piacere{ nomeUnaVolta|}. Guardi, "+FINDING, when:{askingName:true}},
+      {text:"Perfetto. Guardi, "+FINDING, when:{askingName:false}}
+    ],
+    options:FINDING_OPTS
+  },
+  findings:{ stage:"finding", title:"«Cosa avete rilevato?»", pause:true,
+    say:[{text:"Guardi, "+FINDING}],
+    options:FINDING_OPTS_UNCONFIRMED
+  },
+  notSeen:{ stage:"finding", title:"«Non ho visto l'email»", pause:true,
+    say:[{text:"Capisco, ne arrivano tante. Guardi, "+FINDING}],
+    options:FINDING_OPTS_UNCONFIRMED
+  },
+  /* «Cosa intendete? / Mi spieghi meglio», dall'apertura o dopo la frase: il punto emerso (se non è ancora stato detto),
+     il report completo e la proposta. Il nome si chiede qui se non è ancora noto. */
+  explain:{ stage:"next", title:"«Cosa intendete?» · il punto emerso e la proposta",
+    askName:ASK_NAME_MORE,
+    say:findingProposal(
+      "Certo{ nomeUnaVolta|}, dall'analisi è emerso che {emerso}.\n\nQuesto però è solo uno dei tantissimi punti che abbiamo individuato e inserito in un report completo sulla vostra rete digitale.",
+      "Certo{ nomeUnaVolta|}. Questo però è solo uno dei tantissimi punti che abbiamo individuato e inserito in un report completo sulla vostra rete digitale.",
+      "tutti i punti emersi"),
+    options:POST_PROPOSAL_OPTS
+  },
+  /* «Interessante / Cosa potreste fare?»: il cliente ha già mostrato interesse, si porta subito alla proposta.
+     Se la frase dell'analisi è già stata detta non si ripete: resta solo la proposta. */
+  interesting:{ stage:"next", title:"«Interessante» · proponi di approfondire",
+    askName:ASK_NAME_MORE,
+    say:findingProposal(
+      "Certo{ nomeUnaVolta|}, dall'analisi è emerso che {emerso}.\n\nQuesto è uno dei punti che abbiamo inserito nel report completo sulla vostra rete digitale.",
+      "Certo{ nomeUnaVolta|}.",
+      "il quadro completo"),
+    options:POST_PROPOSAL_OPTS
+  },
+
+  /* ───────────── RISPOSTA / FILTRO ─────────────
+     «lo sapevamo» / «non lo sapevamo» non sono ancora un'apertura: si crea curiosità e si lascia rispondere, la proposta
+     arriva solo se il cliente chiede di più («Quali?», «Mi dica») */
+  knew:{ stage:"reply", title:"«Sì, lo sapevamo»", pause:true,
+    say:[{text:"Bene. Consideri che dall'analisi sono emersi anche altri aspetti."}],
+    options:[{id:"opensUp", label:"Quali? / Mi dica", tone:"go", to:"propose"}, HAS_PROVIDER, NOT_NOW, NOT_INTERESTED, PRICE, SEND_SOMETHING, SOS_OPT]
+  },
+  didntKnow:{ stage:"reply", title:"«No, non lo sapevamo»", pause:true,
+    say:[{text:"D'accordo, è proprio per questo che la chiamo. Consideri che non è l'unico aspetto che abbiamo visto."}],
+    options:[{id:"opensUp", label:"Mi dica / Cosa potreste fare?", tone:"go", to:"propose"}, HAS_PROVIDER, NOT_NOW, NOT_INTERESTED, PRICE, SEND_SOMETHING, SOS_OPT]
+  },
+  /* un'obiezione di metodo: si risponde e si lascia parlare il cliente */
+  differently:{ stage:"reply", title:"«Da noi funziona diversamente»", pause:true,
+    say:[{text:"Certo, ogni azienda ha il suo modo di lavorare. Mi racconti pure, oggi da voi come funziona?"}],
+    options:[
+      {id:"opensUp", label:"Si apre / vuole capire meglio", tone:"go", to:"propose"},
+      {id:"allGood", label:"«Va bene così, non ci serve»", tone:"stop", to:"notInterested", reason:"NOT_INTERESTED"},
+      HAS_PROVIDER, SEND_SOMETHING, SOS_OPT
+    ]
+  },
+  price:{ stage:"reply", title:"«Quanto costa?»",
+    say:[{text:PRICE_TEXT}],
+    options:[ACCEPT, SEND_FIRST, NOT_INTERESTED, SOS_OPT]
+  },
+  notInterested:{ stage:"reply", title:"«Non mi interessa» · una sola proposta",
+    say:[{text:"Va benissimo.\n\nVisto che l'analisi l'abbiamo già fatta, prima di lasciarla posso almeno inviarle i punti che abbiamo rilevato?\n\nCosì può valutarli con calma. Preferisce riceverli tramite email o WhatsApp?"}],
+    options:[
+      ...channelOpts("analysisFollowup"),
+      {id:"noThanks", label:"No, grazie", tone:"stop", outcome:"NOT_INTERESTED", reason:"NOT_INTERESTED"},
+      DO_NOT_CONTACT
+    ]
+  },
+  timing:{ stage:"reply", title:"«Non è il momento» · rinvio",
+    say:[{text:"Capisco. Se vuole posso intanto inviarle l'analisi e ci risentiamo quando avete superato questo periodo.\n\nQuando avrebbe più senso ricontattarvi?"}],
+    captures:[
+      {path:"when.period", kind:"period", label:"Quando ricontattarlo", placeholder:"dopo la vendemmia / da metà novembre", chips:["tra qualche settimana","tra un mese","dopo la stagione","il prossimo anno"]},
+      {path:"when.date", kind:"date", label:"Oppure una data precisa"}
+    ],
+    options:[
+      {id:"analysisEmail", label:"Sì all'analisi · email", tone:"go", outcome:"ANALYSIS_AND_FOLLOWUP", set:{"material.requested":true, "material.channel":"email", "material.followupAllowed":true}},
+      {id:"analysisWhatsapp", label:"Sì all'analisi · WhatsApp", tone:"go", outcome:"ANALYSIS_AND_FOLLOWUP", set:{"material.requested":true, "material.channel":"whatsapp", "material.followupAllowed":true}},
+      {id:"onlyRecontact", label:"Niente analisi, solo ricontatto", tone:"wait", outcome:"TIMING_FUTURE"}
+    ]
+  },
+  /* accogliere · nessuna sostituzione · risultato · esempi tecnologici · domanda */
+  provider:{ stage:"reply", title:"«Abbiamo già chi ci segue»",
+    say:[{text:"Chiarissimo, e non stiamo cercando di sostituire chi vi segue.\n\nNoi interveniamo soprattutto dove la tecnologia può aiutarvi ad aumentare [[le prenotazioni dirette|le vendite dirette|le vendite dirette]] e ridurre il lavoro manuale, per esempio collegando meglio gli strumenti che già utilizzate e introducendo automazioni e intelligenza artificiale dove hanno realmente senso.\n\nAnche questa parte è già coperta dalla vostra agenzia?"}],
+    options:[
+      {id:"notCovered", label:"No / non su questa parte", tone:"go", to:"providerGap", reason:"PROVIDER_GAP"},
+      {id:"covered", label:"Sì, anche questa", tone:"wait", to:"providerCovered", reason:"PROVIDER_FULL_COVERAGE"},
+      {id:"hasContract", label:"Abbiamo un contratto", tone:"wait", to:"contract", reason:"CONTRACT"},
+      {id:"sendAnyway", label:"Mandatemi comunque l'analisi", tone:"op", to:"sendMaterial"},
+      NOT_INTERESTED
+    ]
+  },
+  providerCovered:{ stage:"next", title:"Già coperti · l'analisi come riscontro esterno",
+    say:[{text:"D'accordo. Allora, se vuole, le invio comunque l'analisi che abbiamo fatto, così può confrontarla con quello che state già facendo.\n\nPreferisce riceverla tramite email o WhatsApp?"}],
+    options:[
+      ...channelOpts("analysisFollowup"),
+      /* già coperti e niente analisi: nessun contratto dichiarato, nessuna data → PROVIDER_COVERED (PROVIDER_CONTRACT solo dalla scheda «contract») */
+      {id:"noThanks", label:"No, grazie", tone:"wait", outcome:"PROVIDER_COVERED"}
+    ]
+  },
+  contract:{ stage:"reply", title:"«Abbiamo un contratto»",
+    say:[{text:"D'accordo. Le posso chiedere quando termina?\n\nCosì evito di disturbarvi adesso e, se ha senso, possiamo risentirci vicino a quella data."}],
+    captures:[
+      {path:"when.date", kind:"date", label:"Scadenza precisa"},
+      {path:"when.period", kind:"period", label:"Oppure mese o periodo", placeholder:"a marzo / fine anno", chips:"months"}
+    ],
+    options:[
+      {id:"saveExpiry", label:"Segna la scadenza", tone:"wait", outcome:"PROVIDER_CONTRACT", requires:[["when.date","when.period"]]},
+      {id:"unknownExpiry", label:"Non sa quando scade", tone:"wait", outcome:"PROVIDER_CONTRACT", set:{"when.date":"", "when.time":"", "when.period":""}},
+      {id:"sendAnyway", label:"Mi mandi comunque l'analisi", tone:"op", to:"sendMaterial"}
+    ]
+  },
+  busy:{ stage:"reply", title:"«Sono impegnato»",
+    say:[{text:"D'accordo. Quando le torna meglio che la richiami?"}],
+    captures:CALLBACK_CAPS,
+    options:[SAVE_CALLBACK, SEND_SOMETHING, NOT_INTERESTED]
+  },
+  referral:{ stage:"reply", title:"«Se ne occupa un'altra persona»",
+    say:[{text:"Chiarissimo. Posso chiederle chi se ne occupa e qual è il modo migliore per raggiungerlo?"}],
+    captures:[
+      {path:"referral.name", kind:"text", label:"Nome", placeholder:"Marco Rossi"},
+      {path:"referral.phone", kind:"tel", label:"Telefono", placeholder:"333 …"},
+      {path:"referral.email", kind:"email", label:"Email", placeholder:"marco@…"},
+      {path:"when.date", kind:"dayNext", label:"Giorno"},
+      {path:"when.period", kind:"period", label:"Fascia oraria", placeholder:"in mattinata", chips:["in mattinata","nel pomeriggio"]}
+    ],
+    options:[
+      /* nuova persona al telefono: il suo nome è quello del referente; se non c'è, la domanda del nome si potrà rifare */
+      {id:"transferred", label:"Glielo passa", hint:"riapri con il referente", tone:"go", to:"transfer", set:{"flags.transferred":true, "flags.nameAsked":false, "flags.nameSpoken":false}, copy:{"contactName":"referral.name"}},
+      {id:"saveReferral", label:"Segna il referente", hint:"anche con dati parziali", tone:"op", outcome:"REFERRAL"},
+      NOT_INTERESTED
+    ]
+  },
+  /* dopo la proposta: la stessa risposta dell'SOS «Devo sentire il socio», poi videocall con entrambi, richiamata,
+     report oppure il socio come referente. Nessun esito nuovo: il nome del socio va nella nota (o nel referente). */
+  partner:{ stage:"reply", title:"«Devo parlarne con il socio / responsabile»",
+    say:[{text:PARTNER_TEXT}],
+    captures:[{path:"referral.name", kind:"text", label:"Nome del socio / responsabile, se lo dice", placeholder:"Giulia", soft:true}],
+    options:[
+      {id:"bothCall", label:"Videocall con entrambi", tone:"go", to:"schedule", set:{"appointmentType":"video"}, note:"Presente anche: {referente}"},
+      {id:"callAfter", label:"Mi richiami dopo averne parlato", tone:"wait", to:"callback", note:"Ne parla con: {referente}"},
+      {id:"reportFirst", label:"Mandatemi il report", tone:"wait", to:"sendMaterial", note:"Ne parla con: {referente}"},
+      {id:"talkToPartner", label:"Parlate direttamente con lui / lei", tone:"op", to:"referral"},
+      SOS_OPT
+    ]
+  },
+  sendMaterial:{ stage:"reply", title:"«Mandatemi qualcosa»",
+    say:[{text:"Volentieri. Le invio l'analisi che abbiamo preparato.\n\nPreferisce riceverla tramite email o WhatsApp?"}],
+    /* chi rifiuta l'analisi appena offerta va alla chiusura: rifargli la stessa offerta sarebbe un secondo tentativo */
+    options:[...channelOpts("analysisFollowup"), {id:"noThanks", label:"No, grazie / Non mi interessa", tone:"stop", outcome:"NOT_INTERESTED", reason:"NOT_INTERESTED"}]
+  },
+  noContact:{ stage:"reply", title:"Segreteria o nessuna risposta",
+    hintBefore:"Se parte la segreteria, lascia questo messaggio (circa 15 secondi).",
+    say:[{text:"{saluto}, sono {commerciale} di Agria System. Vi avevo inviato un'email {giornoEmail} a proposito di un'analisi che abbiamo fatto sulla rete digitale di {azienda}. Proverò a ricontattarvi. Grazie e {congedo}."}],
+    options:[
+      {id:"voicemailLeft", label:"Messaggio lasciato in segreteria", tone:"op", outcome:"VOICEMAIL", reason:"VOICEMAIL"},
+      {id:"unreached", label:"Nessuna risposta / occupato", tone:"op", outcome:"UNREACHED", reason:"NO_ANSWER"}
+    ]
+  },
+
+  /* ───────────── PROSSIMO PASSO ───────────── */
+  /* solo dopo un'apertura reale del cliente («Quali? / Mi dica» dopo «lo sapevamo», «si apre» dopo «da noi funziona diversamente»,
+     uscita SOS «Proponi approfondimento»): proposta corta, senza date. «Interessante» e «Mi spieghi meglio» hanno le loro schede. */
+  propose:{ stage:"next", title:"Proponi di approfondire",
+    say:proposal("Certo. Eventualmente potremmo approfondire il resto dell'analisi direttamente insieme."),
+    options:[ACCEPT, SEND_FIRST, NOT_NOW, NOT_INTERESTED, PRICE, SOS_OPT]
+  },
+  providerGap:{ stage:"next", title:"Parte tecnologica scoperta · proponi di approfondire",
+    say:proposal("Allora è proprio la parte su cui possiamo darvi una mano. Eventualmente potremmo approfondire l'analisi direttamente insieme."),
+    options:[ACCEPT, SEND_FIRST, NOT_INTERESTED, SOS_OPT]
+  },
+  /* ha accettato la proposta in Umbria: videocall o incontro, poi il giorno (la proposta non si ripete) */
+  meetingType:{ stage:"next", title:"Come preferisce approfondire?",
+    say:[{text:"Ottimo. Come preferisce approfondire, in videocall oppure con un incontro conoscitivo?"}],
+    options:[
+      {id:"video", label:"Videocall", tone:"go", to:"schedule", set:{"appointmentType":"video"}},
+      {id:"inPerson", label:"Incontro conoscitivo", tone:"go", to:"schedule", set:{"appointmentType":"in_person"}}
+    ]
+  },
+  /* il cliente propone già giorno e ora («martedì alle 15»): si segnano subito, senza disponibilità né altre domande.
+     L'appuntamento vuole un'ora precisa: se dice solo «giovedì mattina», l'ora si chiede (nota sul campo). */
+  appointmentDirect:{ stage:"next", title:"Propone già giorno e ora",
+    say:[{text:"Perfetto, me lo segno subito."}],
+    captures:[
+      {path:"when.date", kind:"dayNext", label:"Data / giorno"},
+      {path:"when.time", kind:"time", label:"Ora", hint:"se dice solo la fascia, chiedi a che ora"},
+      {path:"appointmentType", kind:"appointmentType", label:"Tipo", hint:"se non l'ha detto", when:{umbria:true}}
+    ],
+    options:[
+      {id:"setAppointment", label:"Fissa l'appuntamento", tone:"go", outcome:"APPOINTMENT", requires:[["when.date"],["when.time"]]},
+      SOS_OPT
+    ]
+  },
+  /* il cliente ha accettato: solo adesso le disponibilità */
+  schedule:{ stage:"next", title:"Scegli il giorno",
+    say:[{text:"Perfetto, allora vediamo quando le torna meglio. Le andrebbe bene {slot1}, oppure {slot2}?"}],
+    options:[
+      {id:"slot1", slot:1, tone:"go", hint:"fissa l'appuntamento"},
+      {id:"slot2", slot:2, tone:"go", hint:"fissa l'appuntamento"},
+      {id:"otherTime", label:"Propone un altro momento", tone:"go", to:"appointmentOther"}
+    ]
+  },
+  appointmentOther:{ stage:"next", title:"Propone un altro momento",
+    say:[{text:"Certo, mi dica pure quando le torna meglio."}],
+    captures:[{path:"when.date", kind:"dayNext", label:"Giorno"}, {path:"when.time", kind:"time", label:"Ora"}],
+    options:[
+      {id:"setAppointment", label:"Fissa l'appuntamento", tone:"go", outcome:"APPOINTMENT", requires:[["when.date"],["when.time"]]},
+      SEND_FIRST
+    ]
+  },
+  analysisFollowup:{ stage:"next", title:"Analisi accettata · ricontatto",
+    say:[{text:"Perfetto. Dopo che ha avuto modo di vederla, preferisce che ci risentiamo oppure preferisce eventualmente ricontattarci lei?"}],
+    captures:[{path:"material.address", kind:"text", label:"Indirizzo email o numero WhatsApp, se lo detta", placeholder:"facoltativo", soft:true}],
+    options:[
+      {id:"callMe", label:"Ci risentiamo / Mi richiami", tone:"go", outcome:"ANALYSIS_AND_FOLLOWUP", set:{"material.followupAllowed":true}},
+      {id:"willCall", label:"Vi ricontatto io", tone:"op", outcome:"ANALYSIS_ONLY", set:{"material.followupAllowed":false}},
+      {id:"later", label:"Vediamo più avanti", tone:"wait", to:"laterChoice"}
+    ]
+  },
+  /* «Vediamo più avanti» è ambiguo: una sola domanda per capire chi si fa vivo. Nessuna data inventata. */
+  laterChoice:{ stage:"next", title:"«Vediamo più avanti» · chi si fa vivo",
+    say:[{text:"Va bene. Più avanti mi faccio sentire io, oppure preferisce essere lei a ricontattarci?"}],
+    captures:[
+      {path:"when.period", kind:"period", label:"Se dice quando", placeholder:"tra un mese / dopo la stagione", chips:["tra qualche settimana","tra un mese","dopo la stagione","il prossimo anno"], soft:true},
+      {path:"when.date", kind:"date", label:"Oppure una data precisa", soft:true}
+    ],
+    options:[
+      {id:"callMeLater", label:"Mi richiami più avanti", tone:"wait", outcome:"TIMING_FUTURE", set:{"material.followupAllowed":true}},
+      {id:"willContactUs", label:"Preferisco ricontattarvi io", tone:"op", outcome:"ANALYSIS_ONLY", set:{"material.followupAllowed":false}}
+    ]
+  },
+  callback:{ stage:"next", title:"Richiamata",
+    say:[{text:"Certo. Quando le torna meglio che la richiami?"}],
+    captures:CALLBACK_CAPS,
+    options:[SAVE_CALLBACK, SEND_FIRST]
+  }
+  },
+
+  /* ───────────── ESITI ─────────────
+     label: come compare nei pulsanti · closing: la frase con cui chiudere la chiamata · hint: nota al posto della chiusura.
+     Gli stati di HubSpot (lead status, trattative, task) NON si decidono qui: li deciderà Agria Commercial a partire
+     dall'esito. Le azioni previste (codici in src/core.js, testi in «actions» qui sotto) sono solo informative. */
+  outcomes:{
+    /* le chiusure non ripetono l'intercalare della battuta appena detta (es. «Perfetto, allora vediamo…» → «Benissimo, allora…»).
+       Se il nome di chi risponde è noto, la chiusura lo usa una volta («Benissimo Marco, allora…»); senza nome resta «Benissimo, allora…». */
+    APPOINTMENT:{ label:"Videocall / incontro fissato", tone:"go",
+      closing:[{text:"Benissimo{ nome|}, allora {appuntamento}. Le mando una conferma e intanto preparo l'analisi completa. Grazie e {congedo}."}] },
+    ANALYSIS_AND_FOLLOWUP:{ label:"Analisi accettata + richiamata", tone:"go",
+      closing:[{text:"Benissimo{ nome|}, allora le invio l'analisi {canaleFrase} e poi la risento io{ quando|}. Grazie e {congedo}."}] },
+    ANALYSIS_ONLY:{ label:"Analisi accettata senza richiamata", tone:"go",
+      closing:[{text:"D'accordo{ nome|}, allora le invio l'analisi {canaleFrase}, così la valuta con calma. Grazie e {congedo}."}] },
+    CALLBACK:{ label:"Richiamata concordata", tone:"wait",
+      closing:[{text:"Perfetto{ nome|}, allora la richiamo {quando}. Grazie e {congedo}."}] },
+    /* anche da «Vediamo più avanti» → «Mi richiami più avanti»: in quel caso l'analisi accettata resta da inviare */
+    TIMING_FUTURE:{ label:"Non è il momento / stagione", tone:"wait",
+      closing:[
+        {text:"Perfetto{ nome|}, allora le invio l'analisi {canaleFrase} e mi faccio vivo io {quando|più avanti}. Grazie e {congedo}.", when:{canale:true}},
+        {text:"D'accordo{ nome|}, allora ci risentiamo {quando|più avanti}. Grazie e buon lavoro.", when:{canale:false}}
+      ] },
+    /* solo quando il cliente dichiara davvero un contratto (scheda «contract» o scelta esplicita nell'Esito rapido) */
+    PROVIDER_CONTRACT:{ label:"Contratto con un fornitore", tone:"wait",
+      closing:[
+        {text:"Perfetto, allora mi segno di risentirvi vicino alla scadenza. Grazie e {congedo}.", when:{quando:true}},
+        {text:"Va bene, allora mi segno di risentirvi più avanti. Grazie e {congedo}.", when:{quando:false}}
+      ] },
+    /* già coperti da un partner anche sulla parte tecnologica, nessuna apertura oggi: niente contratto, niente data */
+    PROVIDER_COVERED:{ label:"Già coperti da un partner", tone:"wait",
+      closing:[{text:"Va bene, la ringrazio comunque. Le auguro {congedo}."}] },
+    NOT_INTERESTED:{ label:"Non interessato", tone:"stop",
+      closing:[{text:"D'accordo{ nome|}, la ringrazio comunque per il tempo. Le auguro {congedo}."}] },
+    DO_NOT_CONTACT:{ label:"Non ricontattare", tone:"stop",
+      closing:[{text:"D'accordo, ne prendo nota. Non la ricontatterò. Le auguro {congedo}."}] },
+    REFERRAL:{ label:"Referente diverso", tone:"op",
+      closing:[{text:"Perfetto, grazie. Contatterò direttamente {referente|la persona giusta}. Le auguro {congedo}."}] },
+    VOICEMAIL:{ label:"Segreteria", tone:"op", closing:[],
+      hint:"Messaggio lasciato. Prossimo tentativo suggerito in un'altra fascia oraria." },
+    UNREACHED:{ label:"Nessuna risposta / occupato", tone:"op", closing:[],
+      hint:"Prossimo tentativo suggerito in un'altra fascia oraria." }
+  },
+
+  /* testi delle azioni previste (codici stabili in src/core.js, ACTION_CODES): compaiono nella schermata Esito come promemoria */
+  actions:{
+    CREATE_APPOINTMENT:"Registrare l'appuntamento: {quandoData|data da definire}",
+    SEND_APPOINTMENT_CONFIRMATION:"Inviare la conferma dell'appuntamento",
+    PREPARE_ANALYSIS:"Preparare l'analisi personalizzata su {azienda}",
+    SEND_ANALYSIS:"Inviare l'analisi {canaleFrase}",
+    CREATE_CALLBACK:"Richiamata: {quandoData|data da definire}",
+    SCHEDULE_REACTIVATION:"Ricontatto futuro: {quandoData|senza data}",
+    CONTACT_REFERRAL:"Contattare il referente: {referenteDati|dati da completare}",
+    RETRY_CALL:"Nuovo tentativo in un'altra fascia oraria",
+    NO_FUTURE_CONTACT:"Nessun contatto futuro: né chiamate né email",
+    LOG_CALL_NOTE:"Nota della chiamata"
+  },
+
+  /* pannello «Esito rapido»: sempre raggiungibile durante la chiamata, anche dall'SOS */
+  quick:[
+    {tone:"go", title:"Avanzamento", codes:["APPOINTMENT","ANALYSIS_AND_FOLLOWUP","ANALYSIS_ONLY"]},
+    {tone:"wait", title:"Rinvio o barriera", codes:["CALLBACK","TIMING_FUTURE","PROVIDER_CONTRACT","PROVIDER_COVERED"]},
+    {tone:"op", title:"Operativo o nessun contatto", codes:["REFERRAL","VOICEMAIL","UNREACHED"]},
+    {tone:"stop", title:"Stop", codes:["NOT_INTERESTED","DO_NOT_CONTACT"]}
+  ],
+
+  /* motivo / percorso registrato nell'esito (codici stabili in src/core.js) */
+  reasons:{
+    INTERESTED:"Persona giusta, disponibile ad ascoltare", ASKED_FINDINGS:"Ha chiesto cosa è emerso",
+    EMAIL_NOT_SEEN:"Non aveva visto l'email",
+    NOT_NOW:"Non è il momento / stagione", HAS_PROVIDER:"Ha già chi lo segue",
+    PROVIDER_GAP:"Partner presente, parte tecnologica scoperta", PROVIDER_FULL_COVERAGE:"Partner che copre anche la parte tecnologica",
+    CONTRACT:"Contratto in corso", NOT_INTERESTED:"Non interessato", DO_NOT_CONTACT:"Ha chiesto di non essere ricontattato",
+    BUSY:"Impegnato al momento", WRONG_PERSON:"Se ne occupa un'altra persona", SEND_MATERIAL:"Ha chiesto di ricevere materiale",
+    NO_CONTACT:"Nessun contatto", VOICEMAIL:"Segreteria", NO_ANSWER:"Nessuna risposta / occupato", QUICK_OUTCOME:"Esito segnato dal pannello rapido"
+  },
+
+  /* etichette dei dati nella schermata Esito: prima quelle specifiche dell'esito, poi quelle generali */
+  fields:{
+    "when.date":"Giorno", "when.time":"Ora", "when.period":"Fascia o periodo", "appointmentType":"Modalità",
+    "material.channel":"Canale per l'analisi", "material.address":"Recapito dettato", "referral.name":"Nome del referente",
+    "referral.phone":"Telefono", "referral.email":"Email", "contactName":"Parlato con", "note":"Nota"
+  },
+  fieldsByOutcome:{
+    APPOINTMENT:{"when.date":"Giorno dell'appuntamento", "when.time":"Ora"},
+    ANALYSIS_AND_FOLLOWUP:{"when.date":"Richiamata · giorno", "when.time":"Ora", "when.period":"Oppure periodo"},
+    CALLBACK:{"when.date":"Richiamata · giorno", "when.time":"Ora", "when.period":"Oppure fascia", "when.date|when.time|when.period":"Giorno, ora o fascia della richiamata"},
+    TIMING_FUTURE:{"when.date":"Data precisa", "when.period":"Periodo per ricontattare"},
+    PROVIDER_CONTRACT:{"when.date":"Scadenza precisa", "when.period":"Oppure mese o periodo"},
+    REFERRAL:{"when.date":"Quando cercarlo · giorno", "when.period":"Fascia oraria"}
+  },
+
+  /* ───────────── SOS · ALTRA RISPOSTA ─────────────
+     Quando il cliente dice una frase fuori dai pulsanti. Risposte parlate e brevi: prima il risultato, poi lo strumento;
+     niente nomi di persone del team, niente tempistiche fisse, niente promesse assolute. La risposta non porta da sola
+     all'appuntamento: dopo, il commerciale sceglie una delle uscite (returns). hint = nota per il commerciale, non si dice.
+     (Il campo ref:"chiave" riuserebbe una risposta corta di src/data.js: oggi tutte le risposte sono scritte qui.) */
+  sos:{
+    returns:[
+      {id:"back", label:"Torna alla conversazione", tone:"op", back:true},
+      {id:"propose", label:"Proponi approfondimento", tone:"go", to:"propose"},
+      {id:"send", label:"Invia analisi", tone:"op", to:"sendMaterial"},
+      {id:"callback", label:"Richiamata", tone:"wait", to:"callback"},
+      {id:"quick", label:"Termina / esito rapido", tone:"op", quick:true}
+    ],
+    topics:[
+      {key:"chi", title:"Chi siete?", keys:"chi siete societa azienda presentatevi agria",
+        text:"Siamo una tech company specializzata esclusivamente nel vostro settore.\n\nLavoriamo sulla parte digitale e tecnologica per aumentare le opportunità dirette e ridurre il lavoro manuale, utilizzando automazioni, integrazioni e intelligenza artificiale dove hanno realmente senso."},
+      {key:"cosa", title:"Cosa fate?", keys:"cosa fate servizi fare concretamente spiegare",
+        text:"In pratica vi aiutiamo ad avere più [[prenotazioni|vendite|vendite]] dirette e meno lavoro manuale.\n\nPer esempio colleghiamo gli strumenti che già usate e automatizziamo i passaggi ripetitivi, e quando serve lavoriamo anche sul sito."},
+      {key:"perche", title:"Perché proprio noi?", keys:"perche noi proprio voi motivo scelto",
+        text:"Perché lavoriamo esclusivamente nel vostro settore, e prima di chiamarvi abbiamo analizzato proprio la vostra azienda."},
+      {key:"prezzo", title:"Quanto costa?", keys:"costo costa prezzo cifra quanto preventivo budget soldi investimento caro",
+        text:PRICE_TEXT, hint:"Zero cifre a voce."},
+      {key:"tempi", title:"Quanto ci mettete?", keys:"tempi tempistiche tempo settimane mesi durata pronto",
+        text:"Dipende da cosa c'è da fare e dagli strumenti che avete già. Prima verifichiamo cosa serve davvero, poi il team le dà dei tempi precisi."},
+      {key:"tecnico", title:"Domanda tecnica", keys:"tecnica tecnico domanda funziona funzionamento sicurezza",
+        text:"Su questo preferisco che le risponda con precisione il nostro team tecnico, così la risposta è giusta per il vostro caso.\n\nEventualmente lo coinvolgiamo quando guardiamo l'analisi insieme."},
+      {key:"gestionale", title:"Gestionale", keys:"gestionale software programma pms integrazione collega excel",
+        text:"Di solito il vostro gestionale resta, perché partiamo da quello che avete già.\n\nPoi il nostro team verifica sul vostro caso se e come collegarlo al resto."},
+      {key:"dati", title:"Dati / proprietà", keys:"dati proprieta privacy codice accessi dominio miei",
+        text:"Sì, sito, dati e accessi restano vostri, intestati a voi.\n\nNoi lavoriamo con i permessi che ci date voi."},
+      {key:"vincoli", title:"Vincoli / contratti", keys:"vincoli contratti vincolate firmare durata impegno",
+        text:"Mettiamo tutto per iscritto, cosa facciamo, in che tempi e a che costo.\n\nValgono gli accordi di quel progetto, per il resto siete liberi."},
+      /* non dice nulla sul contenuto della frase dell'analisi, che può riguardare anche il sito */
+      {key:"sito", title:"Sito già rifatto", keys:"sito rifatto nuovo appena fatto web abbiamo",
+        text:"Ottimo, allora c'è già una buona base.\n\nNoi lavoriamo soprattutto su quello che succede dopo, quando il cliente vi contatta o [[prenota|ordina|ordina]], e partiamo da quello che avete già."},
+      {key:"ai", title:"AI", keys:"ai intelligenza artificiale chatgpt robot automatica",
+        text:"Per noi l'intelligenza artificiale è uno strumento, non il servizio che vendiamo.\n\nLa usiamo dove riduce davvero il lavoro manuale o porta più opportunità dirette."},
+      /* Referenze: frase prudente, senza nomi di clienti. Quando ci saranno clienti autorizzati a essere citati, si cambia solo qui. */
+      {key:"referenze", title:"Per chi avete già lavorato?", keys:"referenze clienti lavorato esempi casi nomi chi",
+        text:"Guardi, i nomi dei clienti non li facciamo senza la loro autorizzazione.\n\nPer questo abbiamo analizzato direttamente {azienda}, così parliamo di cose concrete che vi riguardano."},
+      {key:"socio", title:"Devo sentire il socio", keys:"socio padre madre moglie marito figlio famiglia parlarne decidere",
+        text:PARTNER_TEXT},
+      {key:"altro", title:"Altro", keys:"altro altra domanda diversa",
+        text:"Guardi, è una domanda giusta. Preferisco risponderle con precisione guardando il vostro caso, invece di darle una risposta generica.",
+        hint:"Se la frase del cliente è specifica, cercala qui sopra: compaiono anche le schede complete."}
+    ],
+    /* schede di approfondimento della versione precedente, consultabili dall'SOS (le altre si trovano con la ricerca) */
+    deepPhases:["f2","f3","f4","f5","f6"],
+    /* schede della versione precedente sostituite dalle risposte 2.0 (tempistiche fisse, nomi di singole persone):
+       restano in src/data.js, ma nel Navigator 2.0 non compaiono né nella ricerca né tra gli approfondimenti */
+    deepHidden:["o_tec_tempi","r4_non_sa"]
+  }
+};
+
+if(typeof module!=="undefined"&&module.exports) module.exports=FLOW;
+root.AGRIA_FLOW=FLOW;
+})(typeof window!=="undefined"?window:globalThis);
+
+/* ── src/core.js ── */
+/* Navigator 2.0 · MOTORE della chiamata — logica pura, senza grafica né accesso alla pagina.
+   È l'unica fonte di verità per:
+     · lo stato della chiamata (preparazione, scheda corrente, cronologia per «Indietro», dati raccolti);
+     · le transizioni del flusso (src/flow.js) e l'«Esito rapido»;
+     · il contratto dell'esito: buildCallOutcome() costruisce il risultato strutturato, validateCallOutcome() lo verifica,
+       finalize() valida → costruisce → salva → prepara la prossima azienda. Documentazione: docs/esito-chiamata.md.
+   Lo usano la pagina (src/page.html) e i test in Node (tools/test-core.js): stesso codice, nessuna copia.
+   Non chiama servizi esterni, non invia nulla: il risultato resta nel browser (localStorage) finché Agria Commercial
+   non lo leggerà in un milestone successivo. */
+(function(root){
+"use strict";
+
+/* schemaVersion 2: «observedProblem» e «interventionDirection» sono sostituiti da un solo «analysisFinding» */
+const SCHEMA_VERSION=2;
+const APP_VERSION="2.0.0";
+
+/* Codici stabili: non dipendono dal testo mostrato. Le etichette italiane sono in src/flow.js (outcomes, reasons). */
+const OUTCOME_CODES=["APPOINTMENT","ANALYSIS_AND_FOLLOWUP","ANALYSIS_ONLY","CALLBACK","TIMING_FUTURE","PROVIDER_CONTRACT","PROVIDER_COVERED","NOT_INTERESTED","DO_NOT_CONTACT","REFERRAL","VOICEMAIL","UNREACHED"];
+const REASON_CODES=["INTERESTED","ASKED_FINDINGS","EMAIL_NOT_SEEN","NOT_NOW","HAS_PROVIDER","PROVIDER_GAP","PROVIDER_FULL_COVERAGE","CONTRACT","NOT_INTERESTED","DO_NOT_CONTACT","BUSY","WRONG_PERSON","SEND_MATERIAL","NO_CONTACT","VOICEMAIL","NO_ANSWER","QUICK_OUTCOME"];
+/* Azioni semanticamente previste dopo la chiamata. NON sono stati di HubSpot: come tradurle in lead status, trattative,
+   task e note lo decide solo Agria Commercial. Qui non c'è, e non deve esserci, una mappa degli stati CRM. */
+const ACTION_CODES=["CREATE_APPOINTMENT","SEND_APPOINTMENT_CONFIRMATION","PREPARE_ANALYSIS","SEND_ANALYSIS","CREATE_CALLBACK","SCHEDULE_REACTIVATION","CONTACT_REFERRAL","RETRY_CALL","NO_FUTURE_CONTACT","LOG_CALL_NOTE"];
+const TONES=["go","wait","stop","op"];
+const CHANNELS=["email","whatsapp"];
+const APPOINTMENT_TYPES=["video","in_person","phone"];
+
+/* localStorage: una chiave per la chiamata in corso, una per l'ultimo esito salvato, una per quello precedente (archivio di un solo passo). */
+const STORAGE_KEYS={
+  state:"agria-navigator:v2:state",
+  lastOutcome:"agria-navigator:v2:last-outcome",
+  previousOutcome:"agria-navigator:v2:previous-outcome"
+};
+
+/* Contratto per esito: quali sezioni dell'output sono valorizzate, quali dati sono indispensabili, quali azioni sono previste.
+   required: elenco di gruppi; ogni gruppo è soddisfatto se almeno uno dei suoi campi è compilato.
+   optionalMaterial: l'esito porta anche il materiale se durante la chiamata il cliente ha accettato l'analisi
+   («Vediamo più avanti» → «Mi richiami più avanti»): l'analisi resta da inviare, non va persa. */
+const CONTRACT={
+  APPOINTMENT:          {sections:["appointment"],         required:[["when.date"],["when.time"],["appointmentType"]], analysisRequested:true,
+                         actions:["CREATE_APPOINTMENT","SEND_APPOINTMENT_CONFIRMATION","PREPARE_ANALYSIS","LOG_CALL_NOTE"]},
+  ANALYSIS_AND_FOLLOWUP:{sections:["material","callback"], required:[["material.channel"]], analysisRequested:true, material:{followupAllowed:true},
+                         actions:["PREPARE_ANALYSIS","SEND_ANALYSIS","CREATE_CALLBACK","LOG_CALL_NOTE"]},
+  ANALYSIS_ONLY:        {sections:["material"],            required:[["material.channel"]], analysisRequested:true, material:{followupAllowed:false},
+                         actions:["PREPARE_ANALYSIS","SEND_ANALYSIS","LOG_CALL_NOTE"]},
+  CALLBACK:             {sections:["callback"],            required:[["when.date","when.time","when.period"]],
+                         actions:["CREATE_CALLBACK","LOG_CALL_NOTE"]},
+  TIMING_FUTURE:        {sections:["reactivation"],        required:[], optionalMaterial:{followupAllowed:true},
+                         actions:["SCHEDULE_REACTIVATION","LOG_CALL_NOTE"]},
+  PROVIDER_CONTRACT:    {sections:["reactivation"],        required:[],
+                         actions:["SCHEDULE_REACTIVATION","LOG_CALL_NOTE"]},
+  PROVIDER_COVERED:     {sections:[],                      required:[],
+                         actions:["LOG_CALL_NOTE"]},
+  NOT_INTERESTED:       {sections:[],                      required:[],
+                         actions:["LOG_CALL_NOTE"]},
+  DO_NOT_CONTACT:       {sections:[],                      required:[], strongConfirm:true,
+                         actions:["NO_FUTURE_CONTACT","LOG_CALL_NOTE"]},
+  REFERRAL:             {sections:["referral","callback"], required:[],
+                         actions:["CONTACT_REFERRAL","LOG_CALL_NOTE"]},
+  VOICEMAIL:            {sections:[],                      required:[],
+                         actions:["RETRY_CALL","LOG_CALL_NOTE"]},
+  UNREACHED:            {sections:[],                      required:[],
+                         actions:["RETRY_CALL","LOG_CALL_NOTE"]}
+};
+/* dati modificabili nella schermata Esito, per esito (solo quelli che servono a quell'esito) */
+const OUTCOME_FIELDS={
+  APPOINTMENT:["appointmentType","when.date","when.time"],
+  ANALYSIS_AND_FOLLOWUP:["material.channel","material.address","when.date","when.time","when.period"],
+  ANALYSIS_ONLY:["material.channel","material.address"],
+  CALLBACK:["when.date","when.time","when.period"],
+  TIMING_FUTURE:["when.period","when.date"],
+  PROVIDER_CONTRACT:["when.date","when.period"],
+  PROVIDER_COVERED:[], NOT_INTERESTED:[], DO_NOT_CONTACT:[],
+  REFERRAL:["referral.name","referral.phone","referral.email","when.date","when.period"],
+  VOICEMAIL:[], UNREACHED:[]
+};
+const FIELD_KIND={"appointmentType":"appointmentType","when.time":"time","when.period":"period","material.channel":"channel","material.address":"text","referral.name":"text","referral.phone":"tel","referral.email":"email"};
+function fieldKind(code,path){ if(path==="when.date") return (code==="TIMING_FUTURE"||code==="PROVIDER_CONTRACT")?"date":"dayNext"; return FIELD_KIND[path]||"text"; }
+
+/* preparazione: senza questi dati le battute non si possono dire */
+const PREP_REQUIRED=[
+  ["operator.name","Il tuo nome"],["company.name","Azienda"],["company.sector","Settore"],["company.zone","Zona"],["company.umbria","In Umbria?"],
+  ["company.emailDate","Prima email"],["company.analysisFinding","Frase dopo «è emerso che»"],
+  ["slots.aDay","Disponibilità 1 · giorno"],["slots.aTime","Disponibilità 1 · ora"],["slots.bDay","Disponibilità 2 · giorno"],["slots.bTime","Disponibilità 2 · ora"]
+];
+
+const W=root;
+const FLOW=()=>W.AGRIA_FLOW;
+const V1=()=>W.AGRIA||{nodes:{},sos:{topics:[]},sectors:{}};
+const clone=o=>JSON.parse(JSON.stringify(o));
+const str=v=>(v===undefined||v===null)?"":String(v).trim();
+const nz=v=>{ const s=str(v); return s?s:null; };
+
+/* ───────────── date e orari ───────────── */
+const GIORNI=["domenica","lunedì","martedì","mercoledì","giovedì","venerdì","sabato"];
+const MESI=["gennaio","febbraio","marzo","aprile","maggio","giugno","luglio","agosto","settembre","ottobre","novembre","dicembre"];
+const pad=n=>String(n).padStart(2,"0");
+function isoLocal(d){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+function parseIso(iso){ const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(str(iso)); return m?new Date(+m[1],+m[2]-1,+m[3]):null; }
+function addDays(now,n){ return new Date(now.getFullYear(),now.getMonth(),now.getDate()+n); }
+function dayDiff(iso,now){ const d=parseIso(iso); if(!d) return null; const t=new Date(now.getFullYear(),now.getMonth(),now.getDate()); return Math.round((t-d)/86400000); }
+function dayLabel(iso){ const d=parseIso(iso); if(!d) return ""; return `${GIORNI[d.getDay()]} ${d.getDate()} ${MESI[d.getMonth()]}`; }
+function timeLabel(t){ const m=/^(\d{1,2}):(\d{2})$/.exec(str(t)); if(!m) return str(t); return m[2]==="00"?String(+m[1]):`${+m[1]}:${m[2]}`; }
+/* Data detta a voce, in italiano: «il 1° ottobre», «l'8 ottobre», «l'11 ottobre», «il 10 ottobre»; l'anno solo se la data
+   dista più di circa sei mesi («il 29 dicembre» detto il 2 gennaio, non «il 29 dicembre 2025»).
+   È l'unico posto in cui si decide l'articolo davanti al giorno: niente «il 8». */
+function spokenDate(iso,now){
+  const d=parseIso(iso); if(!d) return ""; now=now||new Date();
+  const n=d.getDate(), day=n===1?"il 1°":(n===8||n===11)?"l'"+n:"il "+n;
+  return `${day} ${MESI[d.getMonth()]}${Math.abs(dayDiff(iso,now))>180?" "+d.getFullYear():""}`;
+}
+/* quando è partita la prima email, detto a voce: esattamente due giorni di calendario prima → «due giorni fa», altrimenti la data parlata */
+function emailWhen(iso,now){ now=now||new Date(); const diff=dayDiff(iso,now); if(diff===null) return ""; return diff===2?"due giorni fa":spokenDate(iso,now); }
+/* ora italiana (Europe/Rome), qualunque sia il fuso del computer */
+function romeClock(now){
+  now=now||new Date();
+  try{ const p=new Intl.DateTimeFormat("it-IT",{timeZone:"Europe/Rome",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(now); const h=+p.find(x=>x.type==="hour").value, m=+p.find(x=>x.type==="minute").value; if(!isNaN(h)&&!isNaN(m)) return {h,m}; }catch(e){}
+  return {h:now.getHours(), m:now.getMinutes()};
+}
+/* saluto: «Buongiorno» fino alle 14:29, «Buonasera» dalle 14:30 (ora italiana). Mai «Buon pomeriggio». */
+function greeting(now){ const {h,m}=romeClock(now); return h*60+m>=14*60+30?"Buonasera":"Buongiorno"; }
+/* congedo: «buona giornata» fino alle 16:59, poi «buona serata» (ora italiana) */
+function farewell(now){ const {h}=romeClock(now); return h<17?"buona giornata":"buona serata"; }
+function slotLabel(day,time){ if(!day||!time) return ""; return `${dayLabel(day)} alle ${timeLabel(time)}`; }
+/* giorno relativo per le richiamate: «oggi», «domani», «giovedì 16 ottobre», con l'anno se diverso */
+function fullDay(iso,now){ const d=parseIso(iso); if(!d) return ""; return dayLabel(iso)+(d.getFullYear()!==now.getFullYear()?" "+d.getFullYear():""); }
+function relDay(iso,now){ const diff=dayDiff(iso,now); if(diff===null) return ""; if(diff===0) return "oggi"; if(diff===-1) return "domani"; return fullDay(iso,now); }
+/* a voce le richiamate vicine diventano «oggi» / «domani»; con absolute (appuntamenti, azioni salvate nell'esito) la data è sempre completa */
+function whenPhrase(when,now,absolute){ now=now||new Date(); when=when||{}; return [when.date?(absolute?fullDay(when.date,now):relDay(when.date,now)):"", when.time?"alle "+timeLabel(when.time):"", str(when.period)].filter(Boolean).join(" "); }
+function monthChips(now,n){ now=now||new Date(); const out=[]; for(let i=1;i<=(n||8);i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); out.push(MESI[d.getMonth()]+(d.getFullYear()!==now.getFullYear()?" "+d.getFullYear():"")); } return out; }
+
+/* ───────────── testi: la frase dell'analisi ─────────────
+   «analysisFinding» è UNA sola frase, preparata da chi analizza la rete digitale del prospect, che completa
+   «Dall'analisi della vostra azienda è emerso che…»: contiene già osservazione, conseguenza e dove Agria può intervenire.
+   Qui si toglie un eventuale «(dall'analisi…) è emerso che» o «che» incollato all'inizio (niente «è emerso che è emerso che»)
+   e il punto finale, e si mette la minuscola (tranne marchi e sigle). Il testo non viene mai composto con altri pezzi. */
+const KEEP_CASE=/^(Google|Booking|Airbnb|Instagram|Facebook|Expedia|Amazon|Shopify|Gemini|Wix|Vivino|TikTok|YouTube|Umbria|Italia|Agria|ChatGPT|WhatsApp|TripAdvisor|WordPress)\b/;
+function lowerFirst(s,keepWord){
+  if(!s) return s; const word=(s.match(/^[^\s,.;:!?]+/)||[""])[0];
+  if(KEEP_CASE.test(s)) return s;
+  if(/[A-ZÀ-Ý]/.test(word.slice(1))) return s;
+  if(keepWord&&word&&word===keepWord) return s;
+  return s[0].toLowerCase()+s.slice(1);
+}
+/* «(dall'analisi…) è emerso che» incollato all'inizio: È / E' / E’ / é, anche con virgola o due punti */
+const EMERSO_PREFIX=/^(?:dall['’`]\s*analisi\b[^.;:]*?[\s,]+)?(?:(?:è|e['’`]|é)\s*,?\s*)?emerso\s*,?\s*che(?=[\s,:;]|$)[\s,:;]*/i;
+function findingPhrase(raw,companyName){
+  let s=str(raw).normalize("NFC").replace(/[«»"“”]/g,"").replace(/\s+/g," ").trim(), prev;
+  do{ prev=s; s=s.replace(/[\s.…]+$/,"").replace(EMERSO_PREFIX,"").replace(/^che\s+/i,"").trim(); }while(s!==prev);   // anche «è emerso che è emerso che…»
+  return lowerFirst(s,(str(companyName).split(/\s+/)[0])||"");
+}
+
+/* ───────────── stato ───────────── */
+function blankDraft(){
+  return {outcome:null, reason:null,
+    material:{requested:false, channel:null, address:"", followupAllowed:false},
+    when:{date:"", time:"", period:""}, appointmentType:null,
+    referral:{name:"", phone:"", email:""}, contactName:"", note:"", dncConfirmed:false};
+}
+/* findingMigrated / legacyIntervention: servono solo a una chiamata preparata con la versione precedente (vedi restoreState) */
+function blankCompany(){ return {name:"", hubspotCompanyId:null, sector:"", zone:"", umbria:"", emailDate:"", analysisFinding:"", contactName:"", sito:"", findingMigrated:false, legacyIntervention:""}; }
+/* Segni della conversazione in corso (il nome di chi risponde sta nella bozza: draft.contactName → contact.name nell'esito):
+     problemSaid  la frase dell'analisi è già stata detta: si segna quando si lascia una scheda che la mostra (è l'«analysisFindingSpoken»)
+     transferred  il centralino ha passato la chiamata
+     askingName   la scheda corrente chiede il nome (deciso all'arrivo: resta anche mentre il nome si scrive o si corregge)
+     nameAsked    la domanda del nome è già stata fatta in questa chiamata: non si rifà
+     nameDone     il commerciale ha scritto il nome o è andato avanti senza: la battuta della scheda compare
+     nameSpoken   il nome è già stato detto in una battuta ({nomeUnaVolta}): dopo, fino alla chiusura, non si ripete */
+function blankFlags(){ return {problemSaid:false, transferred:false, askingName:false, nameAsked:false, nameDone:false, nameSpoken:false}; }
+/* nuovo stato; da uno precedente si tengono solo il nome del commerciale, le disponibilità e l'ultimo esito salvato */
+function newState(prev){
+  return {v:2, screen:"prep", company:blankCompany(),
+    operator:{name:prev?str(prev.operator&&prev.operator.name):""},
+    slots:prev&&prev.slots?Object.assign({aDay:"",aTime:"",bDay:"",bTime:""},prev.slots):{aDay:"",aTime:"",bDay:"",bTime:""},
+    call:{startedAt:null, completedAt:null}, node:null, history:[],
+    flags:blankFlags(), draft:blankDraft(),
+    lastSaved:prev?prev.lastSaved||null:null};
+}
+/* Stato preparato prima dell'arrivo di «analysisFinding»: la chiamata non si perde. Fallback prudente: la frase diventa il vecchio
+   «Cosa è emerso» (scritto per seguire «abbiamo rilevato che», quindi grammaticalmente compatibile); il vecchio «Come possiamo
+   intervenire» NON viene incollato (sarebbe una frase composta): resta da parte e la preparazione lo mostra, da integrare a mano. */
+function migrateCompany(c){
+  const out=Object.assign(blankCompany(),c||{});
+  if(!str(out.analysisFinding)&&str(out.observedProblem)){ out.analysisFinding=str(out.observedProblem); out.findingMigrated=true; }
+  if(str(out.interventionDirection)&&!str(out.legacyIntervention)) out.legacyIntervention=str(out.interventionDirection);   // anche senza il vecchio problema
+  delete out.observedProblem; delete out.interventionDirection;
+  return out;
+}
+/* stato letto dal browser: si accetta solo se è della versione 2, altrimenti si riparte puliti */
+function restoreState(raw){
+  try{ const o=typeof raw==="string"?JSON.parse(raw):raw; if(!o||o.v!==2) return null;
+    const s=newState(); Object.assign(s,o);
+    s.company=migrateCompany(o.company); s.operator=Object.assign({name:""},o.operator||{});
+    s.slots=Object.assign({aDay:"",aTime:"",bDay:"",bTime:""},o.slots||{}); s.call=Object.assign({startedAt:null,completedAt:null},o.call||{});
+    s.flags=Object.assign(blankFlags(),o.flags||{});
+    const d=blankDraft(); s.draft=Object.assign(d,o.draft||{}); ["material","when","referral"].forEach(k=>{ s.draft[k]=Object.assign(blankDraft()[k],(o.draft||{})[k]||{}); });
+    s.history=Array.isArray(o.history)?o.history:[];
+    if(s.screen!=="prep"&&!nodeOf(s.node)&&s.screen!=="outcome"){ s.screen="prep"; s.node=null; s.history=[]; }
+    return s;
+  }catch(e){ return null; }
+}
+
+/* percorsi dei dati: company.* operator.* slots.* flags.* sono nello stato; tutto il resto è nella bozza dell'esito (draft) */
+const ROOTS=["company","operator","slots","flags","call"];
+function target(state,path){ const parts=path.split("."); let obj=ROOTS.includes(parts[0])?state:state.draft; for(let i=0;i<parts.length-1;i++){ if(obj[parts[i]]===undefined||obj[parts[i]]===null) obj[parts[i]]={}; obj=obj[parts[i]]; } return {obj,key:parts[parts.length-1]}; }
+function getField(state,path){ const {obj,key}=target(state,path); return obj[key]; }
+function setField(state,path,value){ const {obj,key}=target(state,path); obj[key]=value; return state; }
+function filled(state,path){ const v=getField(state,path); return typeof v==="boolean"?v:!!str(v); }
+function resolveSetValue(v,now){ if(v==="@today") return isoLocal(now); if(v==="@tomorrow") return isoLocal(addDays(now,1)); return v; }
+function applySet(state,set,now){ Object.entries(set||{}).forEach(([p,v])=>setField(state,p,resolveSetValue(v,now))); }
+
+function prepMissing(state){
+  const miss=PREP_REQUIRED.filter(([p])=>!filled(state,p)).map(([path,label])=>({path,label}));
+  const s=state.slots; if(s.aDay&&s.aTime&&s.aDay===s.bDay&&s.aTime===s.bTime) miss.push({path:"slots.bDay",label:"Le due disponibilità devono essere diverse"});
+  // una frase fatta solo di «è emerso che», virgolette o puntini resterebbe vuota durante la chiamata
+  if(filled(state,"company.analysisFinding")&&!findingPhrase(state.company.analysisFinding,state.company.name)) miss.push({path:"company.analysisFinding",label:"Frase dopo «è emerso che» (manca il contenuto)"});
+  return miss;
+}
+
+/* ───────────── flusso ───────────── */
+function nodeOf(id){
+  if(!id) return null;
+  if(String(id).startsWith("v1:")){ const n=V1().nodes[String(id).slice(3)]; return n?{v1:true,id:String(id).slice(3),data:n}:null; }
+  return FLOW().nodes[id]||null;
+}
+function startCall(state,now){
+  now=now||new Date();
+  if(prepMissing(state).length) return false;
+  state.call={startedAt:now.getTime(), completedAt:null};
+  state.history=[]; state.flags=blankFlags(); state.draft=blankDraft();
+  enterNode(state,FLOW().start,now);
+  return true;
+}
+/* torna alla preparazione senza salvare (numero sbagliato, chiamata partita per errore) */
+function cancelCall(state){ state.screen="prep"; state.node=null; state.history=[]; state.call={startedAt:null,completedAt:null}; state.flags=blankFlags(); state.draft=blankDraft(); return state; }
+function pushHistory(state){ state.history.push({node:state.node, screen:state.screen, draft:clone(state.draft), flags:clone(state.flags)}); }
+function back(state){
+  const h=state.history.pop(); if(!h) return false;
+  const name=state.draft.contactName;
+  state.node=h.node; state.screen=h.screen==="outcome"?"outcome":"call"; state.draft=h.draft; state.flags=h.flags;
+  // il nome di chi risponde resta anche tornando indietro (è la stessa persona), salvo annullare il passo che l'aveva cambiato («Glielo passa»)
+  if(!h.nameSet) state.draft.contactName=name;
+  if(state.screen!=="outcome") state.call.completedAt=null;
+  return true;
+}
+/* «Torna alla conversazione» da un approfondimento: si risale fino all'ultima scheda del flusso principale */
+function backToConversation(state){ let moved=false; while(state.history.length&&String(state.node).startsWith("v1:")){ back(state); moved=true; } return moved; }
+function visibleOptions(state,node,now){ return ((node&&node.options)||[]).filter(o=>condOk(state,o.when,now)); }
+function optionEnabled(state,o){ return (o.requires||[]).every(group=>group.some(p=>filled(state,p))); }
+function choose(state,optionId,now){
+  now=now||new Date();
+  const node=FLOW().nodes[state.node]; if(!node) throw new Error("Scheda corrente sconosciuta: "+state.node);
+  const o=node.options.find(x=>x.id===optionId); if(!o) throw new Error(`Pulsante «${optionId}» assente nella scheda ${state.node}`);
+  if(!condOk(state,o.when,now)) throw new Error(`Pulsante «${optionId}» non visibile nella scheda ${state.node}`);
+  if(o.sos) return {state,sos:true};   // «Altra risposta / SOS»: apre il pannello, la conversazione resta dov'è
+  if(!optionEnabled(state,o)) return {state,blocked:true};
+  pushHistory(state);
+  if(!nameRevealed(state)) skipName(state);   // una risposta del cliente vuol dire che la battuta della scheda è stata detta, anche senza nome
+  leaveNode(state,now);
+  if(node.setOnLeave) applySet(state,node.setOnLeave,now);
+  if(o.set) applySet(state,o.set,now);
+  if(o.copy) Object.entries(o.copy).forEach(([dst,src])=>setField(state,dst,getField(state,src)));
+  if((o.set&&"contactName" in o.set)||(o.copy&&"contactName" in o.copy)) state.history[state.history.length-1].nameSet=true;
+  if(o.note) addNote(state,o.note,now);
+  if(o.reason) state.draft.reason=o.reason;
+  if(o.slot){ const k=o.slot===1?"a":"b"; state.draft.when={date:state.slots[k+"Day"], time:state.slots[k+"Time"], period:""}; enterOutcome(state,"APPOINTMENT",now); }
+  else if(o.outcome) enterOutcome(state,o.outcome,now);
+  else if(o.to) enterNode(state,o.to,now);
+  return {state};
+}
+/* arrivo su una scheda del flusso: setOnEnter registra subito i dati, anche se poi si apre l'SOS o un approfondimento.
+   La scheda con askName chiede il nome solo se non è noto e se la domanda non è già stata fatta in questa chiamata.
+   Chi chiama ha già salvato la cronologia: «Indietro» ripristina tutto. */
+function enterNode(state,id,now){
+  state.node=id; state.screen="call"; const n=FLOW().nodes[id], f=state.flags;
+  f.askingName=!!(n&&n.askName&&!filled(state,"contactName")&&!f.nameAsked);
+  if(f.askingName){ f.nameAsked=true; f.nameDone=false; }
+  if(n&&n.setOnEnter) applySet(state,n.setOnEnter,now||new Date());
+}
+/* ───────────── il nome di chi risponde ─────────────
+   Mentre la scheda chiede il nome, la sua battuta compare appena il nome è scritto (o il commerciale va avanti senza):
+   nameRevealed dice se la battuta è visibile. Il nome si può correggere in ogni momento: le battute si aggiornano. */
+function nameRevealed(state){ const f=state.flags; return !f.askingName||!!f.nameDone||filled(state,"contactName"); }
+function setContactName(state,value){ state.draft.contactName=value==null?"":String(value); if(str(value)) state.flags.nameDone=true; return state; }
+function skipName(state){ state.flags.nameDone=true; return state; }
+/* Si lascia una scheda del flusso (risposta del cliente, uscita SOS, approfondimento, esito rapido): quello che la sua battuta
+   ha detto resta detto. La frase dell'analisi → flags.problemSaid (le schede successive non la ripetono); il nome detto con
+   {nomeUnaVolta} → flags.nameSpoken (le battute successive non lo ripetono, la chiusura sì). Una battuta ancora nascosta
+   (il nome non è stato scritto) non conta. */
+const SAYS_FINDING=/\{[\s,]*(emerso|problema|dettaglio)\b/, SAYS_NAME_ONCE=/\{[\s,]*nomeUnaVolta\b/;
+function leaveNode(state,now){
+  const node=FLOW().nodes[state.node]; if(!node||state.screen!=="call"||!nameRevealed(state)) return;
+  const lines=sayLines(state,node,now||new Date());
+  if(lines.some(l=>SAYS_FINDING.test(l.text))) state.flags.problemSaid=true;
+  if(filled(state,"contactName")&&lines.some(l=>SAYS_NAME_ONCE.test(l.text))) state.flags.nameSpoken=true;
+}
+/* uscite dall'SOS e dagli approfondimenti verso una scheda del flusso */
+function goTo(state,nodeId){ if(!FLOW().nodes[nodeId]) throw new Error("Scheda sconosciuta: "+nodeId); pushHistory(state); leaveNode(state); enterNode(state,nodeId); return state; }
+/* schede della versione precedente sostituite dalle risposte 2.0: restano in src/data.js ma qui non si aprono */
+function isDeepHidden(v1id){ return ((FLOW().sos&&FLOW().sos.deepHidden)||[]).includes(v1id); }
+function openDeep(state,v1id){ if(!V1().nodes[v1id]) throw new Error("Scheda di approfondimento sconosciuta: "+v1id); if(isDeepHidden(v1id)) throw new Error("Scheda sostituita nel Navigator 2.0: "+v1id); pushHistory(state); leaveNode(state); state.node="v1:"+v1id; state.screen="call"; return state; }
+function enterOutcome(state,code,now){
+  now=now||new Date(); if(!CONTRACT[code]) throw new Error("Esito sconosciuto: "+code);
+  const d=state.draft, c=CONTRACT[code];
+  d.outcome=code; if(!d.reason) d.reason="QUICK_OUTCOME"; d.dncConfirmed=false;
+  if(code==="APPOINTMENT"&&!d.appointmentType&&!inUmbria(state)) d.appointmentType="video";
+  if(c.material){ d.material.requested=true; d.material.followupAllowed=c.material.followupAllowed; }
+  state.screen="outcome"; state.call.completedAt=now.getTime();
+  return state;
+}
+/* «Esito rapido»: da qualsiasi scheda (anche SOS e approfondimenti). Dalla schermata Esito cambia solo l'esito. */
+function quickOutcome(state,code,now){ if(state.screen!=="outcome"){ pushHistory(state); leaveNode(state,now); } return enterOutcome(state,code,now); }
+
+/* ───────────── contratto dell'esito ───────────── */
+function fieldLabel(code,path){ const F=FLOW(); return ((F.fieldsByOutcome||{})[code]||{})[path]||(F.fields||{})[path]||path; }
+function missingFields(state){
+  const code=state.draft.outcome; if(!code) return [{paths:["outcome"],label:"Esito"}];
+  // per un gruppo «almeno uno tra…» l'etichetta è quella del gruppo (chiave «a|b|c» in flow.fieldsByOutcome), se c'è
+  return CONTRACT[code].required.filter(g=>!g.some(p=>filled(state,p))).map(g=>{ const key=g.join("|"), own=((FLOW().fieldsByOutcome||{})[code]||{})[key]; return {paths:g,label:own||g.map(p=>fieldLabel(code,p)).join(" o ")}; });
+}
+/* regola del materiale per l'esito: quella fissa del contratto, oppure quella facoltativa se l'analisi è stata davvero accettata */
+function materialRule(code,material){ const c=CONTRACT[code]; if(!c) return null; if(c.material) return c.material; if(c.optionalMaterial&&material&&material.requested&&CHANNELS.includes(material.channel)) return c.optionalMaterial; return null; }
+function outcomeFields(code,state){
+  const extra=state&&!CONTRACT[code].material&&materialRule(code,state.draft.material)?["material.channel","material.address"]:[];
+  return [...extra,...(OUTCOME_FIELDS[code]||[])].map(path=>({path,kind:fieldKind(code,path),label:fieldLabel(code,path),required:(CONTRACT[code].required||[]).some(g=>g.includes(path)),anyOf:(CONTRACT[code].required.find(g=>g.includes(path))||[]).length>1}));
+}
+/* azioni previste (codici semantici, mai stati CRM): quelle del contratto, più preparazione e invio dell'analisi se accettata */
+function actionsFor(code,material){ const c=CONTRACT[code]; if(!c) return []; return (!c.material&&materialRule(code,material)?["PREPARE_ANALYSIS","SEND_ANALYSIS"]:[]).concat(c.actions); }
+function plannedActions(state){ return actionsFor(state.draft.outcome,state.draft.material); }
+const isoTs=ms=>ms?new Date(ms).toISOString():null;
+
+/* Costruisce il risultato strutturato della chiamata (schemaVersion 2). Tutte le sezioni ci sono sempre, con null quando
+   non servono a quell'esito: chi legge non deve indovinare la forma. Dati presenti nella bozza ma estranei all'esito
+   (per esempio un canale scelto prima di tornare indietro) restano fuori. */
+function buildCallOutcome(state,now){
+  now=now||new Date();
+  const d=state.draft, code=d.outcome; if(!CONTRACT[code]) throw new Error("Esito mancante o sconosciuto: "+code);
+  const c=CONTRACT[code], has=s=>c.sections.includes(s), co=state.company, w=d.when||{}, mr=materialRule(code,d.material);
+  const started=state.call.startedAt||null, completed=state.call.completedAt||now.getTime();
+  return {
+    schemaVersion:SCHEMA_VERSION,
+    app:{name:"navigatore-chiamata-agria", version:APP_VERSION},
+    company:{name:str(co.name), hubspotCompanyId:co.hubspotCompanyId?String(co.hubspotCompanyId):null, sector:nz(co.sector), zone:nz(co.zone), umbria:co.umbria==="si", firstEmailDate:nz(co.emailDate)},
+    operator:{name:str(state.operator.name)},
+    contact:{name:nz(d.contactName)},
+    call:{startedAt:isoTs(started), completedAt:isoTs(completed), durationSec:started?Math.max(0,Math.round((completed-started)/1000)):null},
+    outcome:code,
+    reason:REASON_CODES.includes(d.reason)?d.reason:"QUICK_OUTCOME",
+    analysisRequested:!!c.analysisRequested||!!mr,
+    material:mr?{requested:true, channel:CHANNELS.includes(d.material.channel)?d.material.channel:null, address:nz(d.material.address), followupAllowed:!!mr.followupAllowed}
+               :{requested:false, channel:null, address:null, followupAllowed:false},
+    callback:has("callback")?{date:nz(w.date), time:nz(w.time), period:nz(w.period)}:{date:null, time:null, period:null},
+    appointment:has("appointment")?{type:APPOINTMENT_TYPES.includes(d.appointmentType)?d.appointmentType:null, date:nz(w.date), time:nz(w.time)}:{type:null, date:null, time:null},
+    referral:has("referral")?{name:nz(d.referral.name), phone:nz(d.referral.phone), email:nz(d.referral.email)}:{name:null, phone:null, email:null},
+    reactivation:has("reactivation")?{reason:REASON_CODES.includes(d.reason)?d.reason:"QUICK_OUTCOME", date:nz(w.date), period:nz(w.period)}:{reason:null, date:null, period:null},
+    doNotContactConfirmed:code==="DO_NOT_CONTACT"&&!!d.dncConfirmed,
+    analysisFinding:nz(findingPhrase(co.analysisFinding,co.name)),   // la frase preparata dall'analisi (da dire dopo «è emerso che»): presente per ogni esito, non significa che sia stata detta
+    note:nz(d.note),
+    plannedActions:plannedActions(state)
+  };
+}
+
+/* Verifica un risultato (anche letto da localStorage). Restituisce l'elenco degli errori: vuoto = valido. */
+function validateCallOutcome(o){
+  const e=[]; const isStrOrNull=v=>v===null||typeof v==="string"; const isDate=v=>v===null||/^\d{4}-\d{2}-\d{2}$/.test(v); const isTime=v=>v===null||/^\d{2}:\d{2}$/.test(v);
+  const allNull=(obj,keys)=>keys.every(k=>obj[k]===null);
+  if(!o||typeof o!=="object") return ["risultato assente"];
+  if(o.schemaVersion!==SCHEMA_VERSION) e.push("schemaVersion diverso da "+SCHEMA_VERSION);
+  if(!OUTCOME_CODES.includes(o.outcome)) e.push("outcome sconosciuto: "+o.outcome);
+  if(!REASON_CODES.includes(o.reason)) e.push("reason sconosciuto: "+o.reason);
+  ["company","operator","contact","call","material","callback","appointment","referral","reactivation"].forEach(k=>{ if(!o[k]||typeof o[k]!=="object") e.push("sezione mancante: "+k); });
+  if(e.length) return e;
+  if(!str(o.company.name)) e.push("company.name vuoto");
+  if(!isStrOrNull(o.company.hubspotCompanyId)) e.push("company.hubspotCompanyId non valido");
+  if(!str(o.operator.name)) e.push("operator.name vuoto");
+  if(!isStrOrNull(o.contact.name)) e.push("contact.name non valido");
+  if(typeof o.call.startedAt!=="string"||typeof o.call.completedAt!=="string") e.push("call.startedAt / completedAt mancanti");
+  if(typeof o.analysisRequested!=="boolean") e.push("analysisRequested non booleano");
+  if(!isStrOrNull(o.analysisFinding)) e.push("analysisFinding non valido");
+  else if(o.analysisFinding&&EMERSO_PREFIX.test(o.analysisFinding.normalize("NFC"))) e.push("analysisFinding non deve iniziare con «è emerso che»");
+  if("observedProblem" in o||"interventionDirection" in o) e.push("observedProblem / interventionDirection non fanno più parte dello schema 2 (c'è analysisFinding)");
+  const m=o.material; if(typeof m.requested!=="boolean"||typeof m.followupAllowed!=="boolean"||!(m.channel===null||CHANNELS.includes(m.channel))||!isStrOrNull(m.address)) e.push("material non valido");
+  const a=o.appointment; if(!(a.type===null||APPOINTMENT_TYPES.includes(a.type))||!isDate(a.date)||!isTime(a.time)) e.push("appointment non valido");
+  const cb=o.callback; if(!isDate(cb.date)||!isTime(cb.time)||!isStrOrNull(cb.period)) e.push("callback non valido");
+  const r=o.referral; if(!isStrOrNull(r.name)||!isStrOrNull(r.phone)||!isStrOrNull(r.email)) e.push("referral non valido");
+  const re=o.reactivation; if(!(re.reason===null||REASON_CODES.includes(re.reason))||!isDate(re.date)||!isStrOrNull(re.period)) e.push("reactivation non valido");
+  if(!Array.isArray(o.plannedActions)||o.plannedActions.some(x=>!ACTION_CODES.includes(x))) e.push("plannedActions: solo codici di azione previsti ("+ACTION_CODES.join(", ")+")");
+  if(e.length||!CONTRACT[o.outcome]) return e;
+  const c=CONTRACT[o.outcome], has=s=>c.sections.includes(s), mr=materialRule(o.outcome,m);
+  if(o.analysisRequested!==(!!c.analysisRequested||!!mr)) e.push("analysisRequested incoerente con l'esito");
+  if(mr){ if(!m.requested) e.push("material.requested deve essere true"); if(!m.channel) e.push("material.channel obbligatorio"); if(m.followupAllowed!==!!mr.followupAllowed) e.push("material.followupAllowed incoerente"); }
+  else if(m.requested||m.channel||m.address||m.followupAllowed) e.push("material valorizzato per un esito che non lo prevede");
+  if(JSON.stringify(o.plannedActions)!==JSON.stringify(actionsFor(o.outcome,m))) e.push("plannedActions incoerenti con l'esito");
+  if(has("appointment")){ if(!a.type||!a.date||!a.time) e.push("appointment: tipo, giorno e ora obbligatori"); } else if(!allNull(a,["type","date","time"])) e.push("appointment valorizzato per un esito che non lo prevede");
+  if(o.outcome==="CALLBACK"&&allNull(cb,["date","time","period"])) e.push("callback: serve almeno giorno, ora o fascia");
+  if(!has("callback")&&!allNull(cb,["date","time","period"])) e.push("callback valorizzato per un esito che non lo prevede");
+  if(!has("referral")&&!allNull(r,["name","phone","email"])) e.push("referral valorizzato per un esito che non lo prevede");
+  if(has("reactivation")){ if(!re.reason) e.push("reactivation.reason obbligatorio"); } else if(!allNull(re,["reason","date","period"])) e.push("reactivation valorizzato per un esito che non lo prevede");
+  if(o.outcome==="DO_NOT_CONTACT"){ if(o.doNotContactConfirmed!==true) e.push("DO_NOT_CONTACT senza conferma"); } else if(o.doNotContactConfirmed!==false) e.push("doNotContactConfirmed valorizzato per un esito diverso");
+  return e;
+}
+
+/* salva l'esito: quello precedente passa nella chiave «previous», il nuovo diventa «last». Restituisce false se il browser non salva. */
+function saveOutcome(storage,outcome){
+  try{ const prev=storage.getItem(STORAGE_KEYS.lastOutcome); if(prev) storage.setItem(STORAGE_KEYS.previousOutcome,prev); storage.setItem(STORAGE_KEYS.lastOutcome,JSON.stringify(outcome)); return true; }catch(e){ return false; }
+}
+function readOutcome(storage,which){ try{ const s=storage.getItem(which==="previous"?STORAGE_KEYS.previousOutcome:STORAGE_KEYS.lastOutcome); return s?JSON.parse(s):null; }catch(e){ return null; } }
+/* dopo il salvataggio: dati della chiamata azzerati; restano il commerciale e le disponibilità (quella appena fissata si libera) */
+function resetAfterSave(state,outcome){
+  const next=newState(state);
+  if(outcome&&outcome.outcome==="APPOINTMENT"){ ["a","b"].forEach(k=>{ if(next.slots[k+"Day"]===outcome.appointment.date&&next.slots[k+"Time"]===outcome.appointment.time){ next.slots[k+"Day"]=""; next.slots[k+"Time"]=""; } }); }
+  if(outcome) next.lastSaved={company:outcome.company.name, outcome:outcome.outcome, at:outcome.call.completedAt};
+  return next;
+}
+/* «Salva e prossima azienda»: valida solo i dati indispensabili, costruisce, verifica, salva, riparte. */
+function finalize(state,storage,now){
+  now=now||new Date();
+  const code=state.draft.outcome; if(!code) return {ok:false, missing:missingFields(state)};
+  const missing=missingFields(state); if(missing.length) return {ok:false, missing};
+  if(CONTRACT[code].strongConfirm&&!state.draft.dncConfirmed) return {ok:false, needsConfirm:true};
+  if(!state.call.completedAt) state.call.completedAt=now.getTime();
+  const outcome=buildCallOutcome(state,now); const errors=validateCallOutcome(outcome);
+  if(errors.length) return {ok:false, errors};
+  const stored=storage?saveOutcome(storage,outcome):false;
+  return {ok:true, stored, outcome, state:resetAfterSave(state,outcome)};
+}
+
+/* riga aggiunta alla nota dell'esito da un pulsante (note:"Ne parla con: {referente}"): solo se tutti i suoi dati ci sono, una volta sola */
+function addNote(state,text,now){
+  let missing=false;
+  const line=str(fill(text,state,{now,wrap:t=>{ if(t.missing){ missing=true; return ""; } return t.pre+t.value+t.suf; }}));
+  if(missing||!line) return; const cur=str(state.draft.note); if(cur.includes(line)) return;
+  state.draft.note=cur?cur+" · "+line:line;
+}
+
+/* ───────────── segnaposto e condizioni ───────────── */
+/* la regione dell'azienda: «In Umbria?» della preparazione. Decide da dove chiamiamo (Perugia / Milano) e se si propone anche l'incontro */
+const inUmbria=state=>state.company.umbria==="si";
+const SECTOR_INDEX={hospitality:0,cantina:1,frantoio:2};
+const VAR_LABELS={saluto:"saluto",congedo:"buona giornata",commerciale:"tuo nome",azienda:"nome azienda",sede:"Perugia o Milano",nomeUnaVolta:"nome di chi risponde",giornoEmail:"giorno dell'email",dataEmail:"giorno dell'email",
+  emerso:"frase dopo «è emerso che»",problema:"frase dopo «è emerso che»",dettaglio:"frase dopo «è emerso che»",slot1:"disponibilità 1",slot2:"disponibilità 2",slotA:"prima disponibilità",slotB:"seconda disponibilità",
+  disponibilita:"disponibilità",quando:"giorno e ora",quandoData:"data",canale:"canale",canaleFrase:"via email o WhatsApp",appuntamento:"giorno e ora dell'appuntamento",modalita:"modalità",
+  referente:"nome del referente",referenteDati:"dati del referente",nome:"nome di chi risponde",titolare:"nome del titolare",iltitolare:"il titolare",zona:"zona",azona:"a [zona]",
+  richiamata:"giorno e ora della richiamata",fissato:"giorno e ora concordati",recapito:"email o WhatsApp",whatsapp:"numero WhatsApp",contatto:"recapito",gestionale:"nome del gestionale",
+  appunti:"quello che ha detto",rgiorno:"giorno",rora:"ora"};
+function resolveVar(state,k,now){
+  now=now||new Date(); const co=state.company, d=state.draft;
+  switch(k){
+    case "saluto": return greeting(now);
+    case "congedo": return farewell(now);
+    case "commerciale": return str(state.operator.name);
+    case "azienda": return str(co.name);
+    case "sede": return inUmbria(state)?"Perugia":"Milano";
+    case "zona": return str(co.zone);
+    case "azona": { const z=str(co.zone); return z?(/^[aeiouàèéìòù]/i.test(z)?"ad ":"a ")+z:""; }
+    case "giornoEmail": case "dataEmail": return emailWhen(co.emailDate,now);
+    case "emerso": case "problema": case "dettaglio": return findingPhrase(co.analysisFinding,co.name);
+    case "slot1": case "slotA": return slotLabel(state.slots.aDay,state.slots.aTime);
+    case "slot2": case "slotB": return slotLabel(state.slots.bDay,state.slots.bTime);
+    case "disponibilita": { const a=slotLabel(state.slots.aDay,state.slots.aTime), b=slotLabel(state.slots.bDay,state.slots.bTime); return a&&b?a+" oppure "+b:(a||b); }
+    case "quando": case "richiamata": case "fissato": return whenPhrase(d.when,now);
+    case "quandoData": return whenPhrase(d.when,now,true);
+    case "canale": return d.material.channel==="whatsapp"?"WhatsApp":d.material.channel==="email"?"email":"";
+    case "canaleFrase": return d.material.channel==="whatsapp"?"su WhatsApp":d.material.channel==="email"?"via email":"";
+    case "modalita": return d.appointmentType==="in_person"?"di persona":d.appointmentType==="video"?"in videocall":d.appointmentType==="phone"?"al telefono":"";
+    case "appuntamento": { const q=whenPhrase({date:d.when.date,time:d.when.time},now,true); if(!q) return ""; return d.appointmentType==="in_person"?"ci vediamo di persona "+q:d.appointmentType==="video"?"ci sentiamo in videocall "+q:"ci sentiamo "+q; }
+    case "referente": return str(d.referral.name);
+    case "referenteDati": return [d.referral.name,d.referral.phone,d.referral.email].map(str).filter(Boolean).join(" · ");
+    case "nome": return str(d.contactName);
+    case "nomeUnaVolta": return state.flags&&state.flags.nameSpoken?"":str(d.contactName);
+    case "titolare": return str(co.contactName);
+    case "iltitolare": { const t=str(co.contactName); if(!t) return ""; const m=t.match(/^(signora|sig\.ra|dottoressa|signor|sig\.|dottor|dott\.|ing\.|avv\.)\s+/i); if(!m) return t; const w=m[1].toLowerCase(); if(/^[aeiou]/.test(w)) return "l'"+t; return (/^(signora|sig\.ra|dottoressa)$/.test(w)?"la ":"il ")+t; }
+    case "recapito": case "whatsapp": return str(d.material.address);
+    case "contatto": return str(d.referral.phone);
+    default: return "";
+  }
+}
+/* when:{…} su righe e pulsanti. Le condizioni delle schede della versione precedente (src/data.js) vengono tradotte. */
+function condOk(state,when,now){
+  if(!when) return true;
+  return Object.entries(when).every(([k,want])=>{
+    if(k==="umbria") return inUmbria(state)===!!want;
+    if(k==="problemSaid"||k==="transferred"||k==="askingName") return !!state.flags[k]===!!want;
+    if(k==="detto"||k==="noto") return !!state.flags.problemSaid===!!want;
+    if(k==="presentato") return !!state.call.startedAt===!!want;
+    if(k==="visto"||k==="sonoio"||k==="altro") return false===!!want;
+    if(k==="sito") return Array.isArray(want)?want.includes(state.company.sito):state.company.sito===want;
+    return !!resolveVar(state,k,now)===!!want;
+  });
+}
+/* Riempie i segnaposto. Stessa sintassi di src/data.js. In pagina opts.wrap produce l'HTML evidenziato; nei test e nelle note
+   si usa il testo semplice (un valore mancante senza alternativa diventa «[etichetta]»). */
+function fill(text,state,opts){
+  opts=opts||{}; if(!text) return "";
+  const now=opts.now||new Date(), esc=opts.escape||(s=>s), post=opts.post||(s=>s);
+  const wrap=opts.wrap||(t=>t.missing?(t.fallback!==undefined?(t.fallback?t.pre+t.fallback+t.suf:""):"["+t.label+"]"):t.pre+t.value+t.suf);
+  const si=SECTOR_INDEX[state.company.sector]??0;
+  let s=String(text).replace(/\[\[([^\]]*)\]\]/g,(_,g)=>g.split("|")[si]??"");
+  // token in testa con suffisso e alternativa vuota, es. «{nome, |}siamo…»: se il valore manca sparisce e la frase parte maiuscola
+  s=s.replace(/^\{([\s,]*)(\w+)([\s,]+)\|\}(\p{Ll})/u,(m,pre,k,suf,c)=>resolveVar(state,k,now)?m:c.toUpperCase());
+  s=esc(s);
+  const toks=[];
+  s=s.replace(/\{([\s,]*)(\w+)([\s,]*)(?:\|([^}]*))?\}/g,(_,pre,k,suf,fb)=>{ const v=resolveVar(state,k,now); return "\u0001"+(toks.push({key:k,pre,suf,value:v,missing:!v,fallback:fb,label:VAR_LABELS[k]||k})-1)+"\u0002"; });
+  s=post(s);
+  return s.replace(/\u0001(\d+)\u0002/g,(_,i)=>wrap(toks[+i]));
+}
+/* righe da dire nella scheda corrente (già filtrate per condizione) e frase di chiusura dell'esito */
+function sayLines(state,node,now){ return ((node&&node.say)||[]).filter(l=>condOk(state,l.when,now)); }
+function closingLines(state,now){ const o=FLOW().outcomes[state.draft.outcome]; return ((o&&o.closing)||[]).filter(l=>condOk(state,l.when,now)); }
+
+/* ───────────── SOS ───────────── */
+function sosTopics(){
+  const v1=V1().sos&&V1().sos.topics||[];
+  return FLOW().sos.topics.map(t=>{ if(!t.ref) return t; const src=v1.find(x=>x.key===t.ref); return Object.assign({},t,{text:src?src.text:"",hint:t.hint||(src&&src.hint)||undefined,missingRef:!src}); });
+}
+
+const CORE={
+  SCHEMA_VERSION,APP_VERSION,OUTCOME_CODES,REASON_CODES,ACTION_CODES,TONES,CHANNELS,APPOINTMENT_TYPES,STORAGE_KEYS,CONTRACT,OUTCOME_FIELDS,PREP_REQUIRED,VAR_LABELS,
+  newState,restoreState,migrateCompany,blankDraft,blankFlags,prepMissing,startCall,cancelCall,nodeOf,visibleOptions,optionEnabled,choose,goTo,openDeep,isDeepHidden,back,backToConversation,actionsFor,
+  nameRevealed,setContactName,skipName,inUmbria,
+  enterOutcome,quickOutcome,missingFields,outcomeFields,fieldLabel,buildCallOutcome,validateCallOutcome,saveOutcome,readOutcome,resetAfterSave,finalize,
+  getField,setField,filled,resolveVar,condOk,fill,sayLines,closingLines,sosTopics,plannedActions,
+  isoLocal,parseIso,addDays,dayLabel,timeLabel,spokenDate,emailWhen,romeClock,greeting,farewell,slotLabel,whenPhrase,monthChips,findingPhrase
+};
+if(typeof module!=="undefined"&&module.exports) module.exports=CORE;
+root.AGRIA_CORE=CORE;
+})(typeof window!=="undefined"?window:globalThis);
